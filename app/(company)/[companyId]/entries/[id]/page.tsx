@@ -52,6 +52,7 @@ interface Entry {
   lines: EntryLine[]
   reversalOf?: LinkedEntry | null
   reversedBy?: LinkedEntry | null
+  bankReceipts?: Array<{ id: string; fileName: string }>
 }
 
 const cents = (value: string | number) => parseCents(String(value)) ?? 0
@@ -128,7 +129,7 @@ export default function EntryDetailPage() {
       })
       const data = await response.json()
       if (response.ok) {
-        setEntry(data)
+        setEntry({ ...data, bankReceipts: entry.bankReceipts })
         toast.success(`Écriture validée sous le n° ${data.entryNumber}`)
       } else {
         toast.error(data.error || 'La validation a échoué. Réessayez dans un instant.')
@@ -283,6 +284,24 @@ export default function EntryDetailPage() {
               {isValidated ? <StatusBadge tone="success">Validée</StatusBadge> : <StatusBadge tone="warning">Brouillon</StatusBadge>}
             </Detail>
             {entry.reference ? <Detail label="Référence">{entry.reference}</Detail> : null}
+            {entry.bankReceipts?.length ? (
+              <Detail label="Justificatifs bancaires">
+                <ul className="space-y-1">
+                  {entry.bankReceipts.map((receipt) => (
+                    <li key={receipt.id}>
+                      <a
+                        className="text-link underline-offset-4 hover:underline"
+                        href={`/api/banking/attachments/${encodeURIComponent(receipt.id)}/proxy?companyId=${encodeURIComponent(companyId)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {receipt.fileName}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </Detail>
+            ) : null}
             {entry.description ? <Detail label="Description">{entry.description}</Detail> : null}
             {entry.reversalOf ? (
               <Detail label="Contre-passation de">

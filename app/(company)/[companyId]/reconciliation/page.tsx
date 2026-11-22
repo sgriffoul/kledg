@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { CheckCircle2, ExternalLink, Workflow } from 'lucide-react'
+import { CheckCircle2, ExternalLink, Paperclip, Workflow } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -16,6 +16,7 @@ import { JustificatifPreviewDialog } from '@/components/features/justificatifs/j
 import {
   ReconciliationQueue,
   ReconciliationQueueSkeleton,
+  attachmentsOf,
   signedAmount,
   type QueueAttachment,
   type QueueTransaction,
@@ -364,6 +365,18 @@ export default function ReconciliationPage() {
 
   const reconciledActions = (transaction: BankTransaction) => (
     <div className="flex items-center justify-end gap-1">
+      {attachmentsOf(transaction).map((attachment) => (
+        <Button
+          key={attachment.id}
+          size="icon-sm"
+          variant="ghost"
+          aria-label={`Voir le justificatif ${attachment.fileName}`}
+          title={attachment.fileName}
+          onClick={() => handlePreviewAttachment(transaction, attachment)}
+        >
+          <Paperclip aria-hidden />
+        </Button>
+      ))}
       {transaction.reconciledWith && (
         <Button size="icon-sm" variant="ghost" asChild>
           <Link

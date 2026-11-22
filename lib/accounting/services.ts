@@ -27,6 +27,7 @@ export {
 export type { EntryLineInput, EntryWithRelations } from './services/entry-lifecycle.service'
 export {
   getCompanyEntry,
+  listEntryBankReceipts,
   getEntryStatus,
   duplicateEntry,
   deleteDraftEntries,

@@ -35,7 +35,9 @@ vi.mock('@/components/features/accounting/fiscal-year-selector', () => ({
   },
 }))
 vi.mock('@/components/features/accounting/transaction-suggestion-dialog', () => ({ TransactionSuggestionDialog: () => null }))
-vi.mock('@/components/features/justificatifs/justificatif-preview-dialog', () => ({ JustificatifPreviewDialog: () => null }))
+vi.mock('@/components/features/justificatifs/justificatif-preview-dialog', () => ({
+  JustificatifPreviewDialog: ({ fileName }: { fileName: string }) => <div role="dialog" aria-label={fileName} />,
+}))
 vi.mock('@/components/features/reconciliation/reconciliation-queue', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/components/features/reconciliation/reconciliation-queue')>()
   return {
@@ -79,6 +81,8 @@ const TRANSACTIONS = [
     reconciled: true,
     reconciledAt: '2026-09-29T08:00:00Z',
     reconciledWith: 'e42',
+    externalTransactionId: 'bank-t2',
+    attachments: [{ id: 'a1', fileName: 'invoice.pdf', fileContentType: 'application/pdf' }],
     bankAccount,
   },
 ]
@@ -124,6 +128,13 @@ async function renderLoaded() {
 }
 
 describe('reconciliation page', () => {
+  it('opens an archived receipt after the transaction has been reconciled', async () => {
+    const user = userEvent.setup()
+    await renderLoaded()
+    await user.click(screen.getByRole('button', { name: 'Voir le justificatif invoice.pdf' }))
+    expect(screen.getByRole('dialog', { name: 'invoice.pdf' })).toBeInTheDocument()
+  })
+
   it('asks for the transactions of the whole days of the selected fiscal year', async () => {
     render(<ReconciliationPage />)
     await waitFor(() => {
