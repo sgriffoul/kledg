@@ -26,15 +26,28 @@ interface InvoiceRow {
   origin: InvoiceOriginCode
   createdInQonto: boolean
   typeCode: string
-  issueDate: string
-  dueDate: string
+  issueDate: string | null
+  dueDate: string | null
   label: string | null
   tiers: { id: string; name: string; auxiliaryAccountNumber: string }
-  totalExclTaxCents: number
-  totalInclTaxCents: number
-  remainingCents: number
-  status: InvoiceStatus
+  totalExclTaxCents: number | null
+  totalInclTaxCents: number | null
+  remainingCents: number | null
+  attachmentId?: string
+  currency?: string
+  status: InvoiceStatus | 'archived'
   source: 'MANUAL' | 'QONTO' | 'E_INVOICE'
+}
+
+function InvoiceAmount({ cents, currency }: { cents: number | null; currency?: string }) {
+  if (cents === null) return <>—</>
+  if (currency && currency !== 'EUR') return <span>{new Intl.NumberFormat('fr-FR', { style: 'currency', currency }).format(cents / 100)}</span>
+  return <Amount value={cents / 100} />
+}
+
+function InvoiceBadge({ status }: { status: InvoiceRow['status'] }) {
+  return status === 'archived' ? <StatusBadge tone="neutral">Archivée</StatusBadge>
+    : <StatusBadge tone={INVOICE_STATUS_TONES[status]}>{INVOICE_STATUS_LABELS[status]}</StatusBadge>
 }
 
 type StatusFilter = 'all' | 'draft' | 'posted'
@@ -64,7 +77,7 @@ export function InvoiceList({ companyId, direction }: { companyId: string; direc
     return () => clearTimeout(timer)
   }, [search])
 
-  const query = new URLSearchParams({ companyId, direction, status, ...(debounced ? { search: debounced } : {}) }).toString()
+  const query = new URLSearchParams({ companyId, direction, status, ...(!sale ? { includeSupplierFiles: '1' } : {}), ...(debounced ? { search: debounced } : {}) }).toString()
   const list = useCursorList<InvoiceRow>(query, async (cursor, signal) => {
     const response = await fetch(`/api/invoices?${query}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal })
     if (!response.ok) throw new Error(await responseError(response, 'Les factures ne se sont pas chargées. Réessayez dans un instant.'))
@@ -97,6 +110,9 @@ export function InvoiceList({ companyId, direction }: { companyId: string; direc
 
   const title = sale ? 'Factures de vente' : 'Factures d’achat'
   const base = `/${companyId}/invoices`
+  const invoiceHref = (row: InvoiceRow) => row.attachmentId
+    ? `/api/banking/attachments/${encodeURIComponent(row.attachmentId)}/proxy?companyId=${encodeURIComponent(companyId)}`
+    : `${base}/${row.id}`
 
   return (
     <div className="space-y-6">
@@ -193,18 +209,18 @@ export function InvoiceList({ companyId, direction }: { companyId: string; direc
               <ul className="divide-y rounded-md border lg:hidden" aria-busy={list.loading || undefined}>
                 {list.items.map((invoice) => (
                   <li key={invoice.id}>
-                    <Link href={`${base}/${invoice.id}`} className="hover:bg-muted/50 flex flex-col gap-1 px-3 py-3">
+                    <Link href={invoiceHref(invoice)} target={invoice.attachmentId ? '_blank' : undefined} rel={invoice.attachmentId ? 'noopener noreferrer' : undefined} className="hover:bg-muted/50 flex flex-col gap-1 px-3 py-3">
                       <span className="flex items-center justify-between gap-3">
                         <span className="min-w-0 truncate font-medium">{invoice.tiers.name}</span>
-                        <Amount value={invoice.totalInclTaxCents / 100} />
+                        <InvoiceAmount cents={invoice.totalInclTaxCents} currency={invoice.currency} />
                       </span>
                       <span className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs">
                         <span>
                           {invoice.typeCode === '381' ? 'Avoir ' : ''}
-                          {invoice.number ? `n°\u00a0${invoice.number}` : 'numéro à l’émission'}, <DateDisplay value={invoice.issueDate} />
+                          {invoice.number ? `n°\u00a0${invoice.number}` : 'numéro à l’émission'}, {invoice.issueDate ? <DateDisplay value={invoice.issueDate} /> : '—'}
                           {sale && invoiceOriginLabel(invoice.origin, invoice.createdInQonto) ? `, ${invoiceOriginLabel(invoice.origin, invoice.createdInQonto)?.toLowerCase()}` : ''}
                         </span>
-                        <StatusBadge tone={INVOICE_STATUS_TONES[invoice.status]}>{INVOICE_STATUS_LABELS[invoice.status]}</StatusBadge>
+                        <InvoiceBadge status={invoice.status} />
                       </span>
                     </Link>
                   </li>
@@ -235,10 +251,10 @@ export function InvoiceList({ companyId, direction }: { companyId: string; direc
                       list.items.map((invoice) => (
                         <TableRow key={invoice.id}>
                           <TableCell>
-                            <DateDisplay value={invoice.issueDate} />
+                            {invoice.issueDate ? <DateDisplay value={invoice.issueDate} /> : '—'}
                           </TableCell>
                           <TableCell>
-                            <Link href={`${base}/${invoice.id}`} className="text-link underline-offset-4 hover:underline">
+                            <Link href={invoiceHref(invoice)} target={invoice.attachmentId ? '_blank' : undefined} rel={invoice.attachmentId ? 'noopener noreferrer' : undefined} className="text-link underline-offset-4 hover:underline">
                               {invoice.typeCode === '381' ? 'Avoir ' : ''}
                               {invoice.number ?? <span className="text-muted-foreground">À l’émission</span>}
                             </Link>
@@ -250,19 +266,19 @@ export function InvoiceList({ companyId, direction }: { companyId: string; direc
                             {invoice.tiers.name} <span className="text-muted-foreground font-mono text-xs">{invoice.tiers.auxiliaryAccountNumber}</span>
                           </TableCell>
                           <TableCell>
-                            <DateDisplay value={invoice.dueDate} />
+                            {invoice.dueDate ? <DateDisplay value={invoice.dueDate} /> : '—'}
                           </TableCell>
                           <TableCell numeric>
-                            <Amount value={invoice.totalExclTaxCents / 100} />
+                            <InvoiceAmount cents={invoice.totalExclTaxCents} currency={invoice.currency} />
                           </TableCell>
                           <TableCell numeric>
-                            <Amount value={invoice.totalInclTaxCents / 100} />
+                            <InvoiceAmount cents={invoice.totalInclTaxCents} currency={invoice.currency} />
                           </TableCell>
                           <TableCell numeric>
-                            <Amount value={invoice.remainingCents / 100} />
+                            <InvoiceAmount cents={invoice.remainingCents} currency={invoice.currency} />
                           </TableCell>
                           <TableCell>
-                            <StatusBadge tone={INVOICE_STATUS_TONES[invoice.status]}>{INVOICE_STATUS_LABELS[invoice.status]}</StatusBadge>
+                            <InvoiceBadge status={invoice.status} />
                           </TableCell>
                         </TableRow>
                       ))

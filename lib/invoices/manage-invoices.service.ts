@@ -121,6 +121,7 @@ export const UpdateLineAccountsBodySchema = z.object({
 
 /** ?companyId=&direction=&status=&search=&tiersId=&cursor=&limit= */
 export const ListInvoicesQuerySchema = z.object({
+  includeSupplierFiles: z.literal('1').optional(),
   direction: directionSchema,
   status: z.enum(['all', 'draft', 'posted']).default('all'),
   search: z.string().trim().max(100).optional(),
@@ -781,4 +782,51 @@ export async function deleteInvoice(companyId: string, id: string): Promise<{ id
   if (deleted.documentFileId) await deleteUnreferencedReceiptFiles(companyId, deleted.documentFileId)
   await writeAuditLog('info', `Invoice deleted: ${deleted.number ?? 'draft without number'}`, { action: 'DELETE_INVOICE', companyId, metadata: { invoiceId: id } })
   return { id }
+}
+
+/** Purchase register: keep native invoice actions, then page through distinct supplier originals. */
+export async function listPurchaseRegister(companyId: string, query: ListInvoicesQuery) {
+  const archiveCursor = query.cursor?.startsWith('file:') ? query.cursor.slice(5) : null
+  const native = archiveCursor === null ? await listInvoices(companyId, query) : { items: [], nextCursor: null }
+  if (native.nextCursor) return native
+  const remaining = query.limit - native.items.length
+  const last = archiveCursor ? await prisma.attachment.findFirst({
+    where: { companyId, id: archiveCursor, supplierId: { not: null } }, select: { id: true, providerData: true },
+  }) : null
+  if (archiveCursor && !last) throw new ValidationError(INVALID_CURSOR)
+  const lastDate = z.object({ purchaseDocument: z.object({ date: z.string() }) }).safeParse(last?.providerData)
+  const afterDate = lastDate.success ? lastDate.data.purchaseDocument.date : ''
+  const term = query.search ?? ''
+  const rows = await prisma.$queryRaw<Array<{
+    id: string; number: string; supplierId: string; name: string; auxiliary: string;
+    facts: Prisma.JsonValue;
+  }>>`
+    SELECT a.id, coalesce(a."providerData"->'purchaseDocument'->>'number', a."fileName") AS number,
+           t.id AS "supplierId", t.name, t."auxiliaryAccountNumber" AS auxiliary,
+           a."providerData"->'purchaseDocument' AS facts
+    FROM attachments a
+    JOIN tiers t ON t.id=a."supplierId" AND t."companyId"=a."companyId" AND t.kind='SUPPLIER'
+    JOIN receipt_files f ON f.id=a."receiptFileId" AND f."companyId"=a."companyId" AND f."contentType"='application/pdf'
+    WHERE a."companyId"=${companyId}
+      AND (${last?.id ?? ''}='' OR (coalesce(a."providerData"->'purchaseDocument'->>'date',''),a.id) < (${afterDate},${last?.id ?? ''}))
+      AND (strpos(lower(a."fileName"), lower(${term}))>0 OR strpos(lower(t.name), lower(${term}))>0
+        OR strpos(lower(a."providerData"->'purchaseDocument'->>'number'), lower(${term}))>0)
+      AND NOT EXISTS (SELECT 1 FROM expense_lines x WHERE x."receiptAttachmentId"=a.id)
+      AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i."companyId"=a."companyId" AND i.direction='PURCHASE'
+        AND i."tiersId"=t.id AND (i."documentFileId"=f.id
+          OR i.number=coalesce(a."providerData"->'purchaseDocument'->>'number', regexp_replace(a."fileName",'[.]pdf$','','i'))
+          OR EXISTS (SELECT 1 FROM "_EntryAttachments" j WHERE j."B"=a.id AND j."A"=i."entryId")))
+    ORDER BY coalesce(a."providerData"->'purchaseDocument'->>'date','') DESC, a.id DESC LIMIT ${remaining + 1}`
+  const files = rows.slice(0, remaining).map(row => {
+    const facts = z.object({ date: z.string(), currency: z.enum(['EUR', 'USD']), total: z.number(), net: z.number().nullable() }).safeParse(row.facts)
+    return {
+      id: row.id, attachmentId: row.id, number: row.number, status: 'archived', typeCode: '380',
+      tiers: { id: row.supplierId, name: row.name, auxiliaryAccountNumber: row.auxiliary },
+      issueDate: facts.success ? facts.data.date : null, dueDate: null, remainingCents: null,
+      currency: facts.success ? facts.data.currency : null,
+      totalInclTaxCents: facts.success ? facts.data.total : null,
+      totalExclTaxCents: facts.success ? facts.data.net : null,
+    }
+  })
+  return { items: [...native.items, ...files], nextCursor: rows.length > remaining ? 'file:' + (files.at(-1)?.id ?? '') : null }
 }

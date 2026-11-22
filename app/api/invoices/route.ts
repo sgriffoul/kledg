@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { companyRoute, fromBody, fromQuery } from '@/lib/api/route'
 import { NO_CACHE_HEADERS } from '@/lib/api/cache-headers'
-import { CreateInvoiceBodySchema, ListInvoicesQuerySchema, listInvoices } from '@/lib/invoices/manage-invoices.service'
+import { CreateInvoiceBodySchema, ListInvoicesQuerySchema, listPurchaseRegister, listInvoices } from '@/lib/invoices/manage-invoices.service'
 import { issueInvoice } from '@/lib/invoices/create-in-qonto.service'
 
 /**
@@ -10,7 +10,12 @@ import { issueInvoice } from '@/lib/invoices/create-in-qonto.service'
  */
 export const GET = companyRoute(
   { company: fromQuery(), permission: { entries: ['read'] }, query: ListInvoicesQuerySchema },
-  async ({ companyId, query }) => NextResponse.json(await listInvoices(companyId, query), { headers: NO_CACHE_HEADERS }),
+  async ({ companyId, query, can }) => {
+    const includeFiles = query.direction === 'PURCHASE' && query.includeSupplierFiles && query.status === 'all'
+      && !query.tiersId && !query.startDate && !query.endDate && can({ banking: ['read'] })
+    const page = includeFiles ? await listPurchaseRegister(companyId, query) : await listInvoices(companyId, query)
+    return NextResponse.json(page, { headers: NO_CACHE_HEADERS })
+  },
 )
 
 /**
