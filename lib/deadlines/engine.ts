@@ -231,6 +231,11 @@ function vatRegimeAt(company: DeadlineCompany, day: string): VatRegime | null {
   return normalizeVat(company.vatRegime, company.isVatExempt)
 }
 
+/** The regime on the transaction date, including historical franchise periods. */
+export function isVatFranchiseAt(company: DeadlineCompany, day: string): boolean {
+  return (historyAt(company, 'vat', day)?.regime ?? company.vatRegime) === 'franchise'
+}
+
 /**
  * The VAT return a month belongs to, the one rule shared by the calendar and
  * the VAT return worksheet (lib/vat-returns):

@@ -49,6 +49,16 @@ const line = (c: VatReturnComputation, code: string) => {
 }
 
 describe('rate of an entry (CGI art. 278 to 281 nonies: 20 %, 10 %, 5,5 %, 2,1 %)', () => {
+  it('uses a matched invoice basis for separately booked non-deductible service VAT', () => {
+    const charge = entry([['6511', 360, 0], ['4452', 0, 360]], { journalCode: 'OD', reference: 'DOMAIN-001' })
+    expect(classifyEntries([charge]).unidentified).toHaveLength(1)
+    const movements = classifyEntries([{ ...charge, separateServiceBaseCents: 1800 }])
+    const worksheet = computeVatReturn({ form: 'CA3', movements, creditCarriedCents: 0 })
+    expect(line(worksheet, 'A3')).toMatchObject({ base: 18 })
+    expect(line(worksheet, '08')).toMatchObject({ base: 18, amount: 4, amountCents: 360 })
+    expect(line(worksheet, '20')).toMatchObject({ amount: 0 })
+  })
+
   it('reads the one French rate whose VAT on the base matches within a cent per line', () => {
     expect(inferRate(2000, 10_000)).toBe(2000)
     expect(inferRate(100, 1_000)).toBe(1000)

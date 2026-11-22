@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { DeadlineCompany } from '@/lib/deadlines/engine'
-import { listPeriods, periodOfKey, previousPeriodKey, deadlineIdOfPeriod, periodOfMonth } from '../periods'
+import { franchiseReverseChargePeriods, listPeriods, periodOfKey, previousPeriodKey, deadlineIdOfPeriod, periodOfMonth } from '../periods'
 import { periodKeyOfDeadline, parsePeriodKey } from '../period-keys'
 import { isReliable, vatChecks, type CheckInput } from '../checks'
 
@@ -42,6 +42,20 @@ describe('VAT return periods', () => {
     const simplified = company({ vatRegime: 'simplified' })
     expect(listPeriods(simplified, { vatCa3Frequency: 'auto' }, '2025-01-01', '2027-04-30').map((p) => p.id)).toEqual(['2027-T2', '2027-T1', '2026', '2025'])
     expect(periodOfMonth(simplified, { vatCa3Frequency: 'monthly' }, '2027-03-01')).toMatchObject({ id: '2027-03' })
+  })
+
+  it('adds historical franchise worksheets while preserving the simplified regime and its 2027 transition', () => {
+    const history = company({
+      vatRegime: 'simplified',
+      regimeHistory: [
+        { regimeType: 'vat', regime: 'franchise', startDate: '2025-01-01', endDate: '2025-12-31' },
+        { regimeType: 'vat', regime: 'simplified', startDate: '2026-01-01', endDate: null },
+      ],
+    })
+    const regular = listPeriods(history, { vatCa3Frequency: 'auto' }, '2025-01-01', '2027-04-30')
+    expect(regular.map((p) => p.id)).toEqual(['2027-T2', '2027-T1', '2026'])
+    expect(franchiseReverseChargePeriods(history, regular, ['2025-11-20', '2025-11-22', '2026-04-12', '2027-03-08'])
+      .map((p) => p.id)).toEqual(['2025-11'])
   })
 
   it('has no return under the franchise en base, and none when the regime is unknown', () => {

@@ -384,8 +384,8 @@ export function VatReturnPage({ companyId }: { companyId: string }) {
         <EmptyState
           bordered
           icon={Landmark}
-          title="Aucune déclaration de TVA à déposer"
-          description="La société relève de la franchise en base de TVA (CGI, art. 293 B) ou est exonérée : elle ne facture pas de TVA, ne la déduit pas et n’a pas de déclaration de TVA à déposer. Si elle dépasse les seuils ou opte pour le paiement de la TVA, changez son régime dans les informations de la société."
+          title="Aucune CA3 ou CA12 détectée"
+          description="La société est en franchise en base de TVA (CGI, art. 293 B) ou est exonérée. Une CA3 peut rester nécessaire pour la TVA due sur certains achats à l’étranger. Kledg propose une feuille de travail pour les périodes où une écriture d’autoliquidation a été validée au compte 4452 en franchise en base."
           action={
             <Button asChild size="sm" variant="outline">
               <Link href={`/${companyId}/informations#regimes-fiscaux`}>Voir les régimes fiscaux</Link>
@@ -437,6 +437,16 @@ export function VatReturnPage({ companyId }: { companyId: string }) {
             </div>
             <p className="text-muted-foreground text-sm">{view.formTitle}</p>
           </div>
+
+          {view.franchiseReverseCharge ? (
+            <Alert>
+              <Info aria-hidden />
+              <AlertTitle>Autoliquidation en franchise en base</AlertTitle>
+              <AlertDescription>
+                Cette feuille de travail reprend la TVA autoliquidée enregistrée au compte 4452. Confirmez la période et le montant à déclarer avec votre service des impôts.
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           <div className="grid gap-4 sm:grid-cols-3">
             <StatCard
@@ -566,7 +576,7 @@ export function VatReturnPage({ companyId }: { companyId: string }) {
           ) : null}
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <SettlementCard companyId={companyId} view={view} canWrite={canWrite} onDone={reload} />
+            {view.franchiseReverseCharge ? null : <SettlementCard companyId={companyId} view={view} canWrite={canWrite} onDone={reload} />}
             <FilingCard key={view.period.id} companyId={companyId} view={view} canWrite={canWrite} onSaved={reload} />
           </div>
 

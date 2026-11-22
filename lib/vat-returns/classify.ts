@@ -107,11 +107,23 @@ export interface VatEntry {
   date: string
   journalCode: string
   reference: string | null
+  reversalOfId?: string | null
   lines: VatEntryLine[]
   /** The sales invoice this entry posts. */
   invoice?: VatInvoiceSource | null
   /** The sales invoices whose pending VAT this entry moves from 44574 to 44571 (one per payment). */
   vatTransferOf?: VatInvoiceSource[]
+  /** Basis of a separately booked, non-deductible VAT charge on a matched service invoice. */
+  separateServiceBaseCents?: number
+}
+
+/** The charge line of a two-line VAT-only entry is the VAT itself, not the taxable basis. */
+export function standaloneServiceTaxEntry(entry: VatEntry): boolean {
+  const [tax] = entry.lines.filter((line) => isAutoliquidationCode(line.code))
+  const [expense] = entry.lines.filter((line) => line.code.startsWith('6') && !isGoodsPurchase(line.code))
+  return Boolean(entry.reference && entry.journalCode === 'OD' && entry.lines.length === 2 &&
+    tax && !isImportCode(tax.code) && !isArt2831Code(tax.code) && tax.creditCents > 0 && tax.debitCents === 0 &&
+    expense && expense.debitCents === tax.creditCents && expense.creditCents === 0)
 }
 
 export interface RateBucket {
@@ -412,7 +424,8 @@ export function classifyEntries(entries: VatEntry[]): VatMovements {
     } else if (autoliquidated > 0) {
       const baseLines = lines.filter((l) => l.code.startsWith('6') || l.code.startsWith('2'))
       const goods = baseLines.filter((l) => isGoodsPurchase(l.code)).reduce((s, l) => s + l.debitCents - l.creditCents, 0)
-      const services = baseLines.filter((l) => !isGoodsPurchase(l.code)).reduce((s, l) => s + l.debitCents - l.creditCents, 0)
+      const services = entry.separateServiceBaseCents ??
+        baseLines.filter((l) => !isGoodsPurchase(l.code)).reduce((s, l) => s + l.debitCents - l.creditCents, 0)
       const rate = inferRate(autoliquidated, goods + services, Math.max(1, baseLines.length))
       if (rate && goods >= 0 && services >= 0) {
         const [goodsVat, servicesVat] = allocateCents(autoliquidated, [goods, services])

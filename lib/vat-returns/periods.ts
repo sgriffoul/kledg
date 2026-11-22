@@ -17,7 +17,7 @@
  * - franchise en base (CGI art. 293 B) or exemption: no return.
  */
 
-import { vatFilingAt, type DeadlineCompany } from '@/lib/deadlines/engine'
+import { isVatFranchiseAt, vatFilingAt, type DeadlineCompany } from '@/lib/deadlines/engine'
 import type { DeadlineSettings } from '@/lib/deadlines/settings'
 import { parsePeriodKey } from './period-keys'
 
@@ -36,6 +36,18 @@ export interface VatPeriod {
   end: string
   /** "septembre 2026", "3e trimestre 2026", "année 2026". */
   label: string
+}
+
+/** Add a monthly worksheet only for a franchise operation outside a regular return. */
+export function franchiseReverseChargePeriods(company: DeadlineCompany, regular: readonly VatPeriod[], taxDays: readonly string[]): VatPeriod[] {
+  const exceptional = new Map<string, VatPeriod>()
+  for (const day of taxDays) {
+    if (!isVatFranchiseAt(company, day) || regular.some((period) => period.start <= day && day <= period.end)) continue
+    const month = day.slice(0, 7)
+    const period = periodOfKey(month)
+    if (period) exceptional.set(month, period)
+  }
+  return [...exceptional.values()]
 }
 
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']

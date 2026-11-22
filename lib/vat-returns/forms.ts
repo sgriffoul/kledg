@@ -19,6 +19,10 @@ export interface VatSource {
 }
 
 export const VAT_SOURCES = {
+  franchiseReverseCharge: {
+    label: 'BOI-LETTRE-000081 (achats de prestations à l’étranger en franchise en base)',
+    url: 'https://bofip.impots.gouv.fr/bofip/1147-PGP.html/identifiant=BOI-LETTRE-000081-20230118',
+  },
   ca3Form: {
     label: 'Formulaire 3310-CA3-SD (cerfa n° 10963*31)',
     url: 'https://www.impots.gouv.fr/sites/default/files/formulaires/3310-ca3-sd/2026/3310-ca3-sd_5377.pdf',

@@ -38,6 +38,7 @@ import {
   isDeductibleFixedAssetsCode,
   isDeductibleOtherCode,
   isSettlementEntry,
+  standaloneServiceTaxEntry,
   SETTLEMENT_REFERENCE_PREFIX,
   isToPayCode,
   type VatEntry,
@@ -47,7 +48,7 @@ import {
 import { computeVatReturn, type VatReturnComputation } from './compute'
 import { isReliable, vatChecks, type BalanceRow, type VatCheck } from './checks'
 import { FORM_TITLES, NOT_FROM_THE_BOOKS, VAT_SOURCES, type VatSource } from './forms'
-import { deadlineIdOfPeriod, listPeriods, periodOfKey, periodOfMonth, PERIOD_KEY_PATTERN, previousPeriodKey, type VatPeriod } from './periods'
+import { deadlineIdOfPeriod, franchiseReverseChargePeriods, listPeriods, periodOfKey, periodOfMonth, PERIOD_KEY_PATTERN, previousPeriodKey, type VatPeriod } from './periods'
 import { settlementReference } from './settlement'
 
 /** Entries of one period read at most: a small company books a few hundred a month. */
@@ -84,6 +85,7 @@ export interface VatReturnView {
    * period to show yet (no fiscal year).
    */
   status: 'ready' | 'exempt' | 'missing-regime' | 'no-period'
+  franchiseReverseCharge?: true
   periods: VatReturnPeriodOption[]
   period: VatPeriod | null
   formTitle: string | null
@@ -149,6 +151,7 @@ async function loadPeriodEntries(companyId: string, period: VatPeriod): Promise<
       entryNumber: true,
       date: true,
       reference: true,
+      reversalOfId: true,
       journal: { select: { code: true } },
       lines: { select: { debit: true, credit: true, account: { select: { code: true } } } },
       invoice: { select: INVOICE_SELECT },
@@ -164,10 +167,73 @@ async function loadPeriodEntries(companyId: string, period: VatPeriod): Promise<
     date: day(row.date),
     journalCode: row.journal.code,
     reference: row.reference,
+    reversalOfId: row.reversalOfId,
     lines: row.lines.map((l) => ({ code: l.account.code, debitCents: cents(l.debit), creditCents: cents(l.credit) })),
     invoice: invoiceSource(row.invoice),
     vatTransferOf: row.vatTransfers.map((t) => invoiceSource(t.invoice)).filter((s): s is VatInvoiceSource => s !== null),
   }))
+}
+
+/** BOI-LETTRE-000081: a franchise company buying taxable foreign services files a CA3. */
+async function loadFranchisePeriods(companyId: string, company: CompanyContext['company'], from: string, today: string, regular: VatPeriod[]) {
+  if (company.vatRegime !== 'franchise' && !company.regimeHistory.some((regime) => regime.regimeType === 'vat' && regime.regime === 'franchise')) return []
+  const rows = await prisma.accountingEntry.findMany({
+    where: {
+      companyId, status: 'validated', date: { gte: utc(from), lte: utc(today) },
+      journal: { code: { notIn: ['AN', 'CL'] } },
+      OR: [{ reference: null }, { reference: { not: { startsWith: SETTLEMENT_REFERENCE_PREFIX } } }],
+      lines: { some: { account: { code: { startsWith: '4452' } }, credit: { gt: 0 } } },
+      NOT: { lines: { some: { account: { code: { startsWith: '4455' } } } } },
+    },
+    distinct: ['date'],
+    select: { date: true },
+  })
+  return franchiseReverseChargePeriods(company, regular, rows.map((row) => day(row.date)))
+}
+
+/** Recover a separate VAT entry's basis only when the reference identifies one posted service invoice. */
+async function withSeparateServiceBases(companyId: string, entries: VatEntry[], period: VatPeriod): Promise<VatEntry[]> {
+  const countByReference = new Map<string, number>()
+  for (const entry of entries) {
+    if (entry.reference && standaloneServiceTaxEntry(entry)) {
+      countByReference.set(entry.reference, (countByReference.get(entry.reference) ?? 0) + 1)
+    }
+  }
+  const references = [...countByReference].filter(([, count]) => count === 1).map(([reference]) => reference)
+  if (references.length === 0) return entries
+  const invoices = await prisma.invoice.findMany({
+    where: {
+      companyId, direction: 'PURCHASE', number: { in: references },
+      issueDate: { gte: utc(period.start), lte: utc(period.end) }, typeCode: '380',
+      entry: { status: 'validated', reversedBy: null },
+    },
+    select: {
+      number: true, issueDate: true, totalExclTax: true, totalVat: true,
+      lines: { select: { nature: true }, take: 2 },
+    },
+  })
+  const invoicesByNumber = new Map<string, Array<(typeof invoices)[number]>>()
+  for (const invoice of invoices) {
+    if (!invoice.number) continue
+    const matches = invoicesByNumber.get(invoice.number)
+    if (matches) matches.push(invoice)
+    else invoicesByNumber.set(invoice.number, [invoice])
+  }
+  return entries.map((entry) => {
+    if (!entry.reference || !standaloneServiceTaxEntry(entry) || countByReference.get(entry.reference) !== 1) return entry
+    const matches = invoicesByNumber.get(entry.reference) ?? []
+    const [invoice] = matches
+    if (matches.length !== 1 || day(invoice.issueDate) > entry.date || cents(invoice.totalVat) !== 0 ||
+        invoice.lines.length !== 1 || invoice.lines[0].nature !== 'SERVICES') return entry
+    return { ...entry, separateServiceBaseCents: cents(invoice.totalExclTax) }
+  })
+}
+
+/** Cancel validated reversal pairs within the same worksheet. Other debit VAT movements need review. */
+function activeFranchiseEntries(entries: VatEntry[]): VatEntry[] {
+  const ids = new Set(entries.map((entry) => entry.id))
+  const reversed = new Set(entries.flatMap((entry) => entry.reversalOfId && ids.has(entry.reversalOfId) ? [entry.reversalOfId] : []))
+  return entries.filter((entry) => !reversed.has(entry.id) && !(entry.reversalOfId && reversed.has(entry.reversalOfId)))
 }
 
 /** Paid invoices shown at most by the check. */
@@ -380,7 +446,9 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
   const firstStart = context.fiscalYears[0]?.startDate ?? null
   const earliest = `${Number(today.slice(0, 4)) - 5}-01-01`
   const from = firstStart && firstStart > earliest ? firstStart : earliest
-  const periods = firstStart ? listPeriods(context.company, context.settings, from, today).slice(0, MAX_PERIODS) : []
+  const regular = firstStart ? listPeriods(context.company, context.settings, from, today) : []
+  const exceptional = firstStart ? await loadFranchisePeriods(companyId, context.company, from, today, regular) : []
+  const periods = [...regular, ...exceptional].sort((a, b) => b.start.localeCompare(a.start)).slice(0, MAX_PERIODS)
 
   const requested = periodKey ? periodOfKey(periodKey) : null
   if (periodKey && !periods.some((p) => p.id === periodKey)) {
@@ -395,6 +463,7 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
   const deadlines = deadlinesAround(context, periods[periods.length - 1].end, addIsoDays(today, 400))
   const dueDates = new Map(deadlines.map((d) => [d.id, d.date]))
   const period = (periodKey ? periods.find((p) => p.id === periodKey) : defaultPeriod(periods, dueDates, today)) as VatPeriod
+  const isFranchiseReturn = exceptional.some((p) => p.id === period.id)
   const index = periods.indexOf(period)
   const previousKey = periods[index + 1]?.id ?? previousPeriodKey(period)
 
@@ -430,11 +499,26 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
     }),
   ])
 
-  const movements = classifyEntries(entries)
+  const franchiseOperations = isFranchiseReturn
+    ? activeFranchiseEntries(entries).filter((entry) => !isBalanceEntry(entry) && !isSettlementEntry(entry))
+    : []
+  const franchiseAdjustments = franchiseOperations.filter((entry) =>
+    entry.lines.some((line) => isAutoliquidationCode(line.code) && line.debitCents > 0))
+  const franchiseEntries = isFranchiseReturn
+    ? await withSeparateServiceBases(companyId, franchiseOperations.filter((entry) =>
+      entry.lines.some((line) => isAutoliquidationCode(line.code) && line.creditCents > 0) && !franchiseAdjustments.includes(entry)), period)
+    : null
+  const movements = classifyEntries(franchiseEntries
+    ? franchiseEntries.map((entry) => ({
+      ...entry,
+      // A franchise worksheet reports the self-assessed tax without VAT deductions.
+      lines: entry.lines.filter((line) => !line.code.startsWith('4456') && !line.code.startsWith('4458') && !line.code.startsWith('4457')),
+    }))
+    : entries)
   const { opening, movedSettlements } = openingBalances
   // The credit of the previous return, with its settlement moved into this period (#122)
   const carriedCode = mainCode(opening, isCreditCarriedCode, '44567')
-  const creditCarriedCents = Math.max(sumWhere(opening, isCreditCarriedCode) + sumWhere(movedSettlements, isCreditCarriedCode), 0)
+  const creditCarriedCents = isFranchiseReturn ? 0 : Math.max(sumWhere(opening, isCreditCarriedCode) + sumWhere(movedSettlements, isCreditCarriedCode), 0)
   const computation = computeVatReturn({ form: period.form, movements, creditCarriedCents, periodEnd: period.end })
 
   // Balances at the end of the period, without this period's settlement (classify left settlements out).
@@ -484,13 +568,14 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
   const view: VatReturnView = {
     today,
     status: 'ready',
+    ...(isFranchiseReturn ? { franchiseReverseCharge: true } : {}),
     periods: periods.map((p) => ({ id: p.id, label: p.label, form: p.form, start: p.start, end: p.end, filed: filings.has(p.id) })),
     period,
-    formTitle: FORM_TITLES[period.form],
+    formTitle: isFranchiseReturn ? 'CA3 de travail pour la TVA autoliquidée en franchise en base' : FORM_TITLES[period.form],
     deadline: deadline ? { date: deadline.date, legalDate: deadline.legalDate, estimated: deadline.estimated, label: deadline.label } : null,
     computation,
     checks,
-    reliable: isReliable(checks),
+    reliable: !isFranchiseReturn && isReliable(checks),
     movements: { entries: movements.entries, pendingCollectedCents: movements.pendingCollectedCents, unidentified: movements.unidentified, unhandled: movements.unhandled },
     settlement: {
       reference,
@@ -499,10 +584,19 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
       entryNumber: settlementEntry?.entryNumber ?? null,
     },
     filing: filings.get(period.id) ?? null,
-    notFromTheBooks: NOT_FROM_THE_BOOKS[period.form],
+    notFromTheBooks: isFranchiseReturn
+      ? [
+        'Échéance à confirmer auprès de votre SIE. Vérifiez les opérations à déclarer qui ne figurent pas encore au compte 4452.',
+        ...franchiseAdjustments.map((entry) => `Vérifiez le mouvement débiteur de TVA autoliquidée sur l’écriture n° ${entry.number}.`),
+        ...NOT_FROM_THE_BOOKS[period.form],
+      ]
+      : NOT_FROM_THE_BOOKS[period.form],
     sources:
       period.form === 'CA3'
-        ? [VAT_SOURCES.ca3Form, VAT_SOURCES.ca3Notice, VAT_SOURCES.bofipDecla, VAT_SOURCES.bofipContent, VAT_SOURCES.cgi287, VAT_SOURCES.pcg944]
+        ? [
+          VAT_SOURCES.ca3Form, VAT_SOURCES.ca3Notice, VAT_SOURCES.bofipDecla, VAT_SOURCES.bofipContent, VAT_SOURCES.cgi287, VAT_SOURCES.pcg944,
+          ...(isFranchiseReturn ? [VAT_SOURCES.franchiseReverseCharge] : []),
+        ]
         : [VAT_SOURCES.ca12Form, VAT_SOURCES.ca12Notice, VAT_SOURCES.bofipSimplified, VAT_SOURCES.bofipDecla, VAT_SOURCES.cgi287, VAT_SOURCES.pcg944],
     deductionCoefficient: coefficient
       ? { year: coefficientYear, line: COEFFICIENT_LINE[period.form], taxationPercent: coefficient.taxationPercent, deductionPercent: coefficient.deductionPercent, source: coefficient.source }
@@ -516,7 +610,7 @@ export async function buildVatReturn(companyId: string, periodKey: string | unde
     creditCarried: { cents: creditCarriedCents, code: carriedCode },
     acomptes: period.form === 'CA12' ? { cents: Math.max(movements.acomptesPaidCents, 0), code: mainCode(nets, isAcompteCode, '44581') } : null,
   }
-  return { view, basis }
+  return { view, basis: isFranchiseReturn ? null : basis }
 }
 
 /** GET /api/companies/[id]/vat-returns: the worksheet of a period (the period due next by default). */

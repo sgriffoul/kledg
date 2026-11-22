@@ -117,7 +117,7 @@ describe('VAT return page', () => {
   it('says there is nothing to file under the franchise en base', async () => {
     view = { ...VIEW, status: 'exempt', period: null, computation: null, periods: [], checks: [] }
     renderAs('accountant')
-    expect(await screen.findByText('Aucune déclaration de TVA à déposer')).toBeInTheDocument()
+    expect(await screen.findByText('Aucune CA3 ou CA12 détectée')).toBeInTheDocument()
     expect(screen.getByText(/CGI, art. 293 B/)).toBeInTheDocument()
   })
 

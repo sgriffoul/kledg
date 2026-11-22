@@ -281,6 +281,35 @@ describe.skipIf(!available)('VAT returns (PostgreSQL)', () => {
     await expect(settle.prepareVatSettlement(franchise.companyId, '2026-09', { now: NOW })).rejects.toThrow('rien à liquider')
   })
 
+  it('opens a franchise CA3 worksheet with the basis of a separately booked service tax', async () => {
+    const { createInvoice, CreateInvoiceBodySchema } = await import('@/lib/invoices/manage-invoices.service')
+    const { postInvoice } = await import('@/lib/invoices/post-invoice.service')
+    const accounts = await Promise.all([
+      prisma.account.create({ data: { companyId: franchise.companyId, fiscalYearId: franchise.fiscalYearId, code: '6511', label: 'Licences' } }),
+      prisma.account.create({ data: { companyId: franchise.companyId, fiscalYearId: franchise.fiscalYearId, code: '4452', label: 'TVA autoliquidée' } }),
+    ])
+    const invoice = await createInvoice(franchise.companyId, CreateInvoiceBodySchema.parse({
+      direction: 'PURCHASE', tiersId: franchise.supplierId, number: 'DOMAIN-001', issueDate: '2026-11-20',
+      lines: [{ label: 'Domaine', quantity: 1, unitPriceCents: 1800, vatRateBp: 0, accountCode: '6511', nature: 'SERVICES' }],
+    }))
+    const posted = await postInvoice(franchise.companyId, invoice.id)
+    expect((await svc.validateEntries(franchise.companyId, [posted.entryId])).errors).toEqual([])
+    await svc.createEntry({
+      companyId: franchise.companyId, journalId: franchise.journals.OD, date: '2026-11-20',
+      reference: 'DOMAIN-001', description: 'Autoliquidation sans déduction', status: 'validated',
+      lines: [
+        { accountId: accounts[0].id, debit: '3.60', credit: '0' },
+        { accountId: accounts[1].id, debit: '0', credit: '3.60' },
+      ],
+    })
+    const { view, basis } = await load.buildVatReturn(franchise.companyId, '2026-11', new Date('2026-12-05'))
+    expect(view).toMatchObject({ status: 'ready', franchiseReverseCharge: true, period: { id: '2026-11', form: 'CA3' } })
+    expect(lineOf(view, 'A3')).toMatchObject({ base: 18 })
+    expect(lineOf(view, '08')).toMatchObject({ base: 18, amount: 4, amountCents: 360 })
+    expect(lineOf(view, '20')).toMatchObject({ amount: 0 })
+    expect(basis).toBeNull()
+  })
+
   describe('routes', () => {
     it('reads the worksheet for every member, 404 outside the company, 401 without a session', async () => {
       for (const who of ['owner', 'accountant', 'viewer'] as const) {

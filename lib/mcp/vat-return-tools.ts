@@ -56,6 +56,7 @@ export function registerVatReturnReadTools(server: McpServer, guard: CompanyGuar
           form: view.formTitle,
           deadline: view.deadline,
           reliable: view.reliable,
+          ...(view.franchiseReverseCharge ? { franchiseReverseCharge: true } : {}),
           result: c ? { kind: c.result.kind, due: c.result.dueEuros, credit: c.result.creditEuros, booksNet: euros(c.result.booksNetCents) } : null,
           lines: (c?.lines ?? []).map((l) => ({
             code: l.code,
