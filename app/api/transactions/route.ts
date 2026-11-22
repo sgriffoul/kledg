@@ -13,7 +13,7 @@ import { listTransactions, ListTransactionsQuerySchema } from '@/lib/transaction
  * - reconciled ('true' | 'false'), startDate, endDate (calendar days yyyy-mm-dd, end included),
  *   fiscalYearId (the dates then narrow the fiscal year)
  * - minAmount, maxAmount, hasAttachments ('with' | 'without'), side ('debit' | 'credit')
- * - searchText (counterparty, label, reference)
+ * - searchText (counterparty, label, reference, attachment filename)
  * - cashflowCategory, cashflowSubcategory, category, operationType (provider categories)
  * - includeSuggestions=true: rule suggestions per transaction (matchingRules)
  * - includeCategories=true: the available filter categories as well (categories)
