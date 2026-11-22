@@ -2,12 +2,18 @@ import { NextResponse } from 'next/server'
 import { companyRoute, fromResource } from '@/lib/api/route'
 import { NO_CACHE_HEADERS } from '@/lib/api/cache-headers'
 import { companyOfTiers } from '@/lib/api/resources'
-import { deleteTiers, getTiers, UpdateTiersBodySchema, updateTiers } from '@/lib/tiers/manage-tiers.service'
+import { deleteTiers, getTiers, listSupplierDocuments, UpdateTiersBodySchema, updateTiers } from '@/lib/tiers/manage-tiers.service'
 
 /** GET /api/tiers/[id]: one customer or supplier. */
 export const GET = companyRoute(
   { company: fromResource(companyOfTiers), permission: { entries: ['read'] } },
-  async ({ companyId, params }) => NextResponse.json(await getTiers(companyId, params.id as string), { headers: NO_CACHE_HEADERS }),
+  async ({ companyId, params, can }) => {
+    const tiers = await getTiers(companyId, params.id as string)
+    const documents = tiers.kind === 'SUPPLIER' && can({ banking: ['read'] })
+      ? await listSupplierDocuments(companyId, tiers.id)
+      : []
+    return NextResponse.json({ ...tiers, documents }, { headers: NO_CACHE_HEADERS })
+  },
 )
 
 /** PATCH /api/tiers/[id]: edits the tiers (its auxiliary number stays once it has invoices). */

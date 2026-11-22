@@ -369,3 +369,16 @@ export async function deleteTiers(companyId: string, id: string): Promise<{ id: 
   })
   return { id }
 }
+
+
+/** Supplier originals filed in the company's archive, including purchases paid from prepaid credit. */
+export function listSupplierDocuments(companyId: string, supplierId: string) {
+  return prisma.attachment.findMany({
+    where: {
+      companyId, supplierId, supplier: { companyId, kind: 'SUPPLIER' },
+      receiptFile: { companyId, contentType: 'application/pdf' }, expenseLines: { none: {} },
+    },
+    select: { id: true, fileName: true },
+    orderBy: [{ fileName: 'asc' }, { id: 'asc' }],
+  })
+}

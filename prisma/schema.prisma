@@ -1074,6 +1074,9 @@ model Attachment {
   receiptFile     ReceiptFile?     @relation(fields: [receiptFileId], references: [id], onDelete: NoAction)
   stagedReceipts  StagedReceipt[]
 
+  supplierId String?
+  supplier Tiers? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  @@index([supplierId])
   supportedEntries AccountingEntry[] @relation("EntryAttachments")
 
   @@unique([integrationId, externalAttachmentId])
@@ -1901,6 +1904,7 @@ model Tiers {
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   address  Address?  @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  supportingAttachments Attachment[]
   invoices Invoice[]
 
   @@unique([companyId, auxiliaryAccountNumber])

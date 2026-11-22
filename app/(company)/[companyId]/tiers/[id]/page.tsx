@@ -24,6 +24,7 @@ interface TiersData {
   paymentTermsEndOfMonth: boolean | null
   notes: string | null
   address: { street: string; postalCode: string; city: string; country: string } | null
+  documents?: Array<{ id: string; fileName: string }>
   _count: { invoices: number }
 }
 
@@ -84,8 +85,23 @@ export default function TiersDetailPage() {
     <div className="w-full max-w-3xl space-y-6">
       <PageHeader
         title={tiers.name}
-        description={`${TIERS_KIND_LABELS[tiers.kind]}, compte auxiliaire ${tiers.auxiliaryAccountNumber}${tiers._count.invoices ? `, ${tiers._count.invoices} facture${tiers._count.invoices > 1 ? 's' : ''}` : ''}.`}
+        description={`${TIERS_KIND_LABELS[tiers.kind]}, compte auxiliaire ${tiers.auxiliaryAccountNumber}.`}
       />
+      {tiers.documents?.length ? (
+        <section aria-label="Factures archivées" className="space-y-2">
+          <h2 className="font-semibold">Factures archivées ({tiers.documents.length})</h2>
+          <ul className="max-h-72 space-y-1 overflow-auto">
+            {tiers.documents.map((file) => (
+              <li key={file.id}>
+                <a href={`/api/banking/attachments/${encodeURIComponent(file.id)}/proxy?companyId=${encodeURIComponent(companyId)}`}
+                   target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
+                  {file.fileName}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <TiersForm
         companyId={companyId}
         tiersId={tiersId}

@@ -34,6 +34,8 @@ export function receiptAttachmentsVisibleTo(actor: StagedReceiptActor): Prisma.A
   return {
     OR: [
       { bankTransactionId: { not: null } },
+      { supplierId: { not: null }, expenseLines: { none: {} } },
+      { supportedEntries: { some: {} }, expenseLines: { none: {} } },
       { stagedReceipts: { some: { uploadedById: actor.userId } } },
       { receiptFile: { is: { stagedReceipts: { some: { uploadedById: actor.userId } } } } },
       { expenseLines: { some: { report: { OR: [{ claimant: { userId: actor.userId } }, { createdById: actor.userId }] } } } },
