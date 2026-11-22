@@ -80,6 +80,17 @@ describe.skipIf(!available)('entry services (PostgreSQL)', () => {
     await prisma?.$disconnect()
   })
 
+  it('opens explicitly linked receipts only for the selected entry and company', async () => {
+    const entry = await sale('2025-02-10', '100', '20', '120')
+    const otherEntry = await sale('2025-02-12', '100', '20', '120')
+    const receipt = await prisma.attachment.create({ data: {
+      companyId: ids.company, fileName: 'facture.pdf', supportedEntries: { connect: { id: entry.id } },
+    } })
+    expect(await ops.listEntryBankReceipts(ids.company, entry.id)).toEqual([{ id: receipt.id, fileName: 'facture.pdf' }])
+    expect(await ops.listEntryBankReceipts(ids.other, entry.id)).toEqual([])
+    expect(await ops.listEntryBankReceipts(ids.company, otherEntry.id)).toEqual([])
+  })
+
   describe('createAccountingEntry and updateAccountingEntry', () => {
     it('creates a draft, edits it, validates it, then refuses any change', async () => {
       const draft = await sale('2025-02-10', '100.00', '20.00', '120.00')

@@ -30,18 +30,23 @@ export async function getCompanyEntry(companyId: string, id: string): Promise<En
   return { ...details, invoiceDocument: invoice && (invoice.documentFileId || invoice.externalAttachmentId) ? { id: invoice.id, fileName: invoice.attachmentFileName ?? 'Facture' } : null }
 }
 
-/** Files of bank transactions linked to the entry, including direct reconciliations to an existing entry. */
+/** Supporting files filed directly on the entry or inherited from its bank reconciliation. */
 export function listEntryBankReceipts(companyId: string, entryId: string) {
   return prisma.attachment.findMany({
     where: {
       companyId,
-      bankTransaction: {
-        bankAccount: { bankConnection: { companyId } },
-        OR: [
-          { reconciliationEntry: { id: entryId, companyId } },
-          { reconciled: true, reconciledWith: entryId },
-        ],
-      },
+      OR: [
+        { supportedEntries: { some: { id: entryId, companyId } }, expenseLines: { none: {} } },
+        {
+          bankTransaction: {
+            bankAccount: { bankConnection: { companyId } },
+            OR: [
+              { reconciliationEntry: { id: entryId, companyId } },
+              { reconciled: true, reconciledWith: entryId },
+            ],
+          },
+        },
+      ],
     },
     select: { id: true, fileName: true },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],

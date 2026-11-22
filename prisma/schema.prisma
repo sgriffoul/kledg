@@ -398,6 +398,7 @@ model AccountingEntry {
   expenseReport           ExpenseReport?           @relation("ExpenseReportEntry")
   vatTransfers            InvoicePayment[]         @relation("InvoicePaymentVatTransfer")
   simpleModeEntry         SimpleModeEntry?
+  supportingAttachments     Attachment[] @relation("EntryAttachments")
   // Tous les comptes d'une écriture doivent appartenir au même exercice fiscal
 
   @@unique([entryNumber, fiscalYearId])
@@ -1072,6 +1073,8 @@ model Attachment {
   receiptFileId   String?
   receiptFile     ReceiptFile?     @relation(fields: [receiptFileId], references: [id], onDelete: NoAction)
   stagedReceipts  StagedReceipt[]
+
+  supportedEntries AccountingEntry[] @relation("EntryAttachments")
 
   @@unique([integrationId, externalAttachmentId])
   @@index([companyId])

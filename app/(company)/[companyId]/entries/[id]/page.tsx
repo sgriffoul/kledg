@@ -301,7 +301,7 @@ export default function EntryDetailPage() {
               </Detail>
             ) : null}
             {entry.bankReceipts?.length ? (
-              <Detail label="Justificatifs bancaires">
+              <Detail label="Justificatifs">
                 <ul className="space-y-1">
                   {entry.bankReceipts.map((receipt) => (
                     <li key={receipt.id}>
