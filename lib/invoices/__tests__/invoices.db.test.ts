@@ -325,6 +325,31 @@ describe.skipIf(!available)('purchase and sales ledger (PostgreSQL)', () => {
       return { invoice, posted }
     }
 
+    it('lists archived supplier PDFs on the purchases page once, including after a full native page', async () => {
+      const native = await invoices.createInvoice(books.companyId, {
+        direction: 'PURCHASE', tiersId: books.supplierId, number: 'NATIVE', issueDate: '2026-06-30',
+        typeCode: '380', lines: [line('Service', '1', 1000, 2000)],
+      })
+      for (const [index, number] of ['NATIVE', 'USD-01'].entries()) {
+        const content = Buffer.from(`%PDF-1.4\n${number}\n%%EOF`)
+        const file = await prisma.receiptFile.create({ data: {
+          companyId: books.companyId, sha256: String(index).repeat(64), size: content.length, contentType: 'application/pdf', content,
+        } })
+        await prisma.attachment.create({ data: {
+          companyId: books.companyId, supplierId: books.supplierId, fileName: number + '.pdf', receiptFileId: file.id,
+          providerData: { purchaseDocument: { number, date: '2026-06-28', net: 1000, total: 1200, currency: 'USD' } },
+        } })
+      }
+      const query = { direction: 'PURCHASE' as const, status: 'all' as const, limit: 1 }
+      const first = await invoices.listPurchaseRegister(books.companyId, query)
+      expect(first.items[0].id).toBe(native.id)
+      const second = await invoices.listPurchaseRegister(books.companyId, { ...query, cursor: first.nextCursor! })
+      expect(second.items).toMatchObject([{ number: 'USD-01', currency: 'USD', totalInclTaxCents: 1200, remainingCents: null, status: 'archived' }])
+      expect(second.nextCursor).toBeNull()
+      expect((await invoices.listPurchaseRegister(books.companyId, { ...query, search: 'USD-01' })).items).toHaveLength(1)
+      expect((await invoices.listPurchaseRegister('other-company', query)).items).toHaveLength(0)
+    })
+
     it('archives an ordinary purchase PDF and settles the supplier in the following month', async () => {
       const { stageReceipt } = await import('@/lib/receipts/stage-receipt.service')
       const { readInvoiceAttachment } = await import('../read-invoice-attachment.service')

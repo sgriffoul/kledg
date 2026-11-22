@@ -34,6 +34,20 @@ describe('empty lists say what to do next', () => {
     expect(within(empty).queryByRole('link', { name: 'Ajouter un client' })).toBeNull()
   })
 
+  it('opens an archived purchase directly from its row and displays the original currency', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ items: [{
+      id: 'a', attachmentId: 'a', number: 'USD-001', currency: 'USD', issueDate: '2026-06-30',
+      tiers: { name: 'Supplier', auxiliaryAccountNumber: 'F1' }, totalInclTaxCents: 1200,
+      dueDate: null, remainingCents: null, totalExclTaxCents: 1000, status: 'archived',
+    }], nextCursor: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<InvoiceList companyId="atelier" direction="PURCHASE" />)
+    const table = within(await screen.findByRole('table'))
+    expect(table.getByRole('link', { name: 'USD-001' })).toHaveAttribute('href', '/api/banking/attachments/a/proxy?companyId=atelier')
+    expect(table.getByText('Archivée')).toBeInTheDocument()
+    expect(table.getByText(/12,00.*US/)).toBeInTheDocument()
+  })
+
   it('searches bank-backed receipts from purchase invoices and opens the original', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (!url.startsWith('/api/transactions?')) return Response.json({ items: [], nextCursor: null })
