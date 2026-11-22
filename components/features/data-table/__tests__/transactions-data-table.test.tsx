@@ -6,7 +6,6 @@ import { TransactionsDataTable } from '../transactions-data-table'
 import type { BankTransaction } from '../transactions-types'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() } }))
-vi.mock('@/components/features/justificatifs/justificatif-preview-dialog', () => ({ JustificatifPreviewDialog: () => null }))
 vi.mock('@/components/features/accounting/entry-preview-dialog', () => ({ EntryPreviewDialog: () => null }))
 
 function tx(id: string, day: string, amount: number, side: 'debit' | 'credit', extra: Partial<BankTransaction> = {}): BankTransaction {
@@ -40,6 +39,19 @@ describe('TransactionsDataTable', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('opens a stored receipt even when the bank transaction has no provider UUID', async () => {
+    const transaction = tx('receipt', '2026-03-01', 16.5, 'debit', {
+      reconciled: true,
+      attachmentsCount: 1,
+      attachment: { id: 'a1', fileName: 'invoice.pdf', fileContentType: 'application/pdf' },
+    })
+    render(<TransactionsDataTable data={[transaction]} companyId="c1" />)
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Voir le justificatif (1 pièce)' }))
+    expect(screen.getByTitle('invoice.pdf')).toHaveAttribute(
+      'src', '/api/banking/attachments/a1/proxy?companyId=c1#toolbar=1&navpanes=1&scrollbar=1',
+    )
   })
 
   it('shows French dates, signed amounts and a running balance in cents that continues across pages', () => {

@@ -90,7 +90,7 @@ export function TransactionsDataTable({
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = React.useState(false)
   const [justificatifPreview, setJustificatifPreview] = React.useState<{
     attachmentId: string
-    transactionUuid: string
+    transactionUuid?: string | null
     companyId: string
     fileName: string
     fileContentType?: string | null
@@ -119,10 +119,10 @@ export function TransactionsDataTable({
         balanceAfter: (t) => balanceAfter.get(t.id),
         showCompanyColumn,
         busyId,
-        canViewAttachment: (t) => Boolean(t.attachment?.id && t.transactionUuid && companyOf(t)),
+        canViewAttachment: (t) => Boolean(t.attachment?.id && companyOf(t)),
         onViewAttachment: (t) => {
           const cid = companyOf(t)
-          if (!t.attachment?.id || !t.transactionUuid || !cid) return
+          if (!t.attachment?.id || !cid) return
           setJustificatifPreview({
             attachmentId: t.attachment.id,
             transactionUuid: t.transactionUuid,

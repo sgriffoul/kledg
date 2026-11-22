@@ -14,7 +14,7 @@ export interface JustificatifPreviewDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   attachmentId: string
-  transactionUuid: string
+  transactionUuid?: string | null
   companyId: string
   fileName: string
   fileContentType?: string | null
@@ -33,7 +33,9 @@ export function JustificatifPreviewDialog({
   fileName,
   fileContentType,
 }: JustificatifPreviewDialogProps) {
-  const proxyUrl = `/api/banking/attachments/${attachmentId}/proxy?companyId=${encodeURIComponent(companyId)}&transactionUuid=${encodeURIComponent(transactionUuid)}`
+  const query = new URLSearchParams({ companyId })
+  if (transactionUuid) query.set('transactionUuid', transactionUuid)
+  const proxyUrl = `/api/banking/attachments/${encodeURIComponent(attachmentId)}/proxy?${query}`
   const contentType = (fileContentType ?? '').toLowerCase()
 
   return (
