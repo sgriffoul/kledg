@@ -50,6 +50,14 @@ const need = (value: string | undefined | null, field: string): string => {
 
 const manageInvoiceTool = fullControlTool({
   name: 'manage_invoice',
+  level: 'write',
+  async authorizeArgs({ companyId, invoiceId, action }, ctx) {
+    if (ctx.access.canAdmin) return
+    if (!['post', 'prepare_purchase_payment', 'payment_candidates', 'record_payment', 'settle'].includes(action))
+      throw new ValidationError('Cette action nécessite une connexion à contrôle total.')
+    const invoice = await getInvoice(companyId, invoiceId)
+    if (invoice.direction !== 'PURCHASE') throw new ValidationError('Cette connexion peut traiter les factures d’achat dans Kledg.')
+  },
   title: 'Comptabiliser, régler ou supprimer une facture',
   description: `Acts on an invoice, like its page: post creates its entry as a draft (AC or VE journal) in the fiscal year of its date; unpost deletes that draft entry (the invoice is a draft again; refused once validated or paid); delete deletes a draft invoice; record_payment records a bank payment (entryLineId: a line of a validated, reconciled entry, from payment_candidates) and letters the invoice once its payments cover it; remove_payment removes a payment (paymentId, from get_invoice); settle letters an invoice whose recorded payments cover it; payment_candidates lists the bank lines that may pay it (read only); resume_qonto resumes the creation in Qonto of an invoice whose answer from Qonto was lost (qontoPending in get_invoice): Kledg looks for it at Qonto first and never creates it twice. A sales invoice numbered by Kledg's series gets its number when posted and keeps it; it cannot be deleted then (a credit note cancels it). Create one with create_draft_invoice, edit a draft with update_draft_invoice. ${ACTS_AS_USER} Every action but payment_candidates is high impact: ${TWO_STEP}`,
   input: {

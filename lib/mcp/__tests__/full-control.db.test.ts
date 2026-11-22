@@ -264,7 +264,10 @@ describe.skipIf(!available)('full control MCP tools', () => {
       for (const level of ['read', 'write'] as const) {
         const names = await toolNames(await apiKey(level))
         expect(names).toContain('list_companies')
-        for (const tool of FULL_CONTROL_TOOLS) expect(names, `${level}: ${tool}`).not.toContain(tool)
+        for (const tool of FULL_CONTROL_TOOLS) {
+          if (level === 'write' && ['create_draft_invoice', 'manage_invoice'].includes(tool)) expect(names).toContain(tool)
+          else expect(names, `${level}: ${tool}`).not.toContain(tool)
+        }
       }
       const admin = await toolNames(await apiKey('admin'))
       for (const tool of FULL_CONTROL_TOOLS) expect(admin, tool).toContain(tool)

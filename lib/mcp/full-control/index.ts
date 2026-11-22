@@ -26,19 +26,22 @@ import { registerRulesLibraryTools } from './rules-library'
 import { createCompanyTool, registerCompanyTools } from './companies'
 
 export function registerFullControlTools(server: McpServer, access: McpAccess, guard: CompanyGuard): void {
+  if (!access.canWrite && !access.canAdmin) return
+  const register: RegisterTool = (tool) => {
+    if (tool.level === 'write' || access.canAdmin) registerFullControlTool(server, access, guard, tool)
+  }
+  registerInvoiceTools(register)
+  registerRecordTools(register)
   if (!access.canAdmin) return
-  const register: RegisterTool = (tool) => registerFullControlTool(server, access, guard, tool)
   registerEntryTools(register)
   registerBankingTools(register)
   registerLedgerTools(register)
   registerYearEndTools(register)
   registerLetteringTools(register)
-  registerInvoiceTools(register)
   registerChartTools(register)
   registerSettingsTools(register)
   registerBankAdminTools(register)
   registerRulesLibraryTools(register)
-  registerRecordTools(register)
   registerCompanyTools(register)
   // Outside any company: the instance policy and a grant of every company (define.ts).
   registerInstanceTool(server, access, guard, createCompanyTool)

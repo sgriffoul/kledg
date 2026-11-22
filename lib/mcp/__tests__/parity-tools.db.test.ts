@@ -86,7 +86,7 @@ const LEVEL: Record<string, AccessLevel> = {
   duplicate_rule: 'admin',
   sync_bank_data: 'admin',
   upload_receipt: 'admin',
-  manage_invoice: 'admin',
+  manage_invoice: 'write',
   import_qonto_invoices: 'admin',
   delete_tiers: 'admin',
   delete_budget_items: 'admin',

@@ -50,6 +50,8 @@ function fakeServer() {
 }
 
 /** Full control tools and whether they need the user's approval in Kledg. */
+const supplierTools = ['create_draft_invoice', 'manage_invoice']
+
 const FULL_CONTROL_TOOLS: Record<string, boolean> = {
   validate_entries: true,
   reverse_entry: true,
@@ -185,15 +187,15 @@ describe('registerKledgTools', () => {
     }
   })
 
-  it('registers full control tools only with kledg:admin', () => {
+  it('reserves full control tools other than supplier workflows for kledg:admin', () => {
     const writer = fakeServer()
     registerKledgTools(writer as never, { user, canWrite: true, canAdmin: false, caller, executionMode: 'validation' })
-    for (const name of Object.keys(FULL_CONTROL_TOOLS)) expect(writer.tools.has(name), name).toBe(false)
+    for (const name of Object.keys(FULL_CONTROL_TOOLS)) expect(writer.tools.has(name), name).toBe(supplierTools.includes(name))
 
     const admin = fakeServer()
     registerKledgTools(admin as never, { user, canWrite: true, canAdmin: true, caller, executionMode: 'validation' })
     const added = [...admin.tools.keys()].filter((name) => !writer.tools.has(name)).sort()
-    expect(added).toEqual(Object.keys(FULL_CONTROL_TOOLS).sort())
+    expect(added).toEqual(Object.keys(FULL_CONTROL_TOOLS).filter(name => !supplierTools.includes(name)).sort())
   })
 
   it('describes full control and, in validation mode, has high-impact tools approved by the user in Kledg', () => {
@@ -243,13 +245,13 @@ describe('registerKledgTools', () => {
     const writer = fakeServer()
     registerKledgTools(writer as never, { user, canWrite: true, canAdmin: false, caller, executionMode: 'validation' })
     const added = [...writer.tools.keys()].filter((name) => !readOnly.tools.has(name)).sort()
-    expect(added).toEqual(['create_draft_entry', ...DRAFT_TOOLS, ...RECEIPT_TOOLS, ...FILING_TOOLS].sort())
+    expect(added).toEqual(['create_draft_entry', ...DRAFT_TOOLS, ...RECEIPT_TOOLS, ...FILING_TOOLS, ...supplierTools].sort())
     for (const name of added) {
       // capture_receipt only opens the capture view
       if (name !== 'capture_receipt') expect(writer.tools.get(name)?.annotations?.readOnlyHint, name).toBe(false)
       expect(writer.tools.get(name)?.description, name).toContain('kledg:write')
       // Draft tools never follow the full control flow; file_receipt's attach and the filing records wait for the user's approval in Kledg.
-      if (name === 'file_receipt' || FILING_TOOLS.includes(name)) expect(writer.tools.get(name)?.inputSchema?.shape, name).toHaveProperty('actionId')
+      if (name === 'file_receipt' || FILING_TOOLS.includes(name) || supplierTools.includes(name)) expect(writer.tools.get(name)?.inputSchema?.shape, name).toHaveProperty('actionId')
       else expect(writer.tools.get(name)?.inputSchema?.shape, name).not.toHaveProperty('actionId')
     }
   })

@@ -846,9 +846,7 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
   registerCompanyLookupTools(server, access)
   registerFeedbackTools(server)
 
-  // Full control (kledg:admin): validate, reconcile, import, close... Never
-  // registered without it; each tool checks it again through the guard.
-  if (access.canAdmin) registerFullControlTools(server, access, guard)
+  registerFullControlTools(server, access, guard)
 
   // Only clients granted kledg:write (and API keys of that level) can prepare drafts.
   if (!canWrite) return

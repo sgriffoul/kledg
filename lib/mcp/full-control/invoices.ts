@@ -117,6 +117,11 @@ async function numberingPreview(args: Args): Promise<{ text: string; problem: st
 
 const createDraftInvoiceTool = fullControlTool({
   name: 'create_draft_invoice',
+  level: 'write',
+  async authorizeArgs(args, ctx) {
+    if (!ctx.access.canAdmin && (args.direction !== 'PURCHASE' || args.numbering || args.qontoStatus))
+      throw new ValidationError('Cette connexion peut préparer les factures d’achat dans Kledg.')
+  },
   title: 'Enregistrer une facture',
   description: `Records a purchase or sales invoice in Kledg as a draft (brouillon), with its lines and several VAT rates: totals are computed by Kledg (VAT per rate on the sum of the line totals, CGI ann. II art. 242 nonies A). A sales invoice follows the company's numbering (numbering): with Qonto-first it is created in Qonto (finalized there, Qonto's number and PDF; qontoStatus draft: a draft in Qonto, numbered once a person finalizes it there), else Kledg's series numbers it when it is posted, or the number typed is kept (an invoice already issued elsewhere: numbering recorded). With post: true it also creates the DRAFT entry (AC or VE journal) in the fiscal year containing the invoice date; a person validates it in Kledg. Kledg never sends the invoice to the customer. ${ACTS_AS_USER} ${TWO_STEP} The dry run shows the totals, the VAT breakdown and how the invoice will be numbered.`,
   input,

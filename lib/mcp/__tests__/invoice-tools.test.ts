@@ -270,13 +270,20 @@ describe('create_draft_invoice (full control)', () => {
     db.tiers.findFirst.mockResolvedValue({ id: 't1', name: 'Martin SA', kind: 'CUSTOMER', auxiliaryAccountNumber: 'C00001' } as never)
   })
 
-  it('is absent without full control', () => {
-    expect(server().has('create_draft_invoice')).toBe(false)
+  it('allows supplier drafts with approval and refuses sales on a draft connection', async () => {
+    const handler = server().get('create_draft_invoice')!
+    const refused = await handler(args)
+    expect(refused.isError).toBe(true)
+    db.tiers.findFirst.mockResolvedValue({ id: 't1', kind: 'SUPPLIER' } as never)
+    const { numbering: _, ...purchase } = args
+    const data = parse(await handler({ ...purchase, direction: 'PURCHASE' }))
+    expect(data).toHaveProperty('approvalUrl')
+    expect(createInvoice).not.toHaveBeenCalled()
   })
 
   it('in validation mode, returns the totals as a dry run and records a pending action, writing nothing', async () => {
     const data = parse(await server({ canAdmin: true }).get('create_draft_invoice')!(args))
-    expect(guard.requireFullControl).toHaveBeenCalledWith('c1', { entries: ['create'] })
+    expect(guard.require).toHaveBeenCalledWith('c1', { entries: ['create'] })
     expect(data).toMatchObject({
       dryRun: true,
       actionId: 'action-1',
