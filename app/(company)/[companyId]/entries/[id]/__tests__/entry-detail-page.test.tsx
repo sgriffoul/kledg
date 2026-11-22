@@ -72,6 +72,14 @@ afterEach(() => {
 })
 
 describe('entry detail page', () => {
+  it('opens an archived bank receipt through the authenticated file endpoint', async () => {
+    entry = { ...DRAFT, status: 'validated', bankReceipts: [{ id: 'receipt-1', fileName: 'invoice.pdf' }] }
+    render(<EntryDetailPage />)
+    expect(await screen.findByRole('link', { name: 'invoice.pdf' })).toHaveAttribute(
+      'href', '/api/banking/attachments/receipt-1/proxy?companyId=c1',
+    )
+  })
+
   it('shows a draft with its lines, auxiliary account and totals in cents', async () => {
     render(<EntryDetailPage />)
     expect(await screen.findByRole('heading', { name: "Brouillon d'écriture" })).toBeInTheDocument()

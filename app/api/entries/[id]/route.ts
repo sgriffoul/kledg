@@ -1,13 +1,17 @@
 import { NextResponse } from 'next/server'
 import { companyRoute, fromResource } from '@/lib/api/route'
 import { companyOfEntry } from '@/lib/api/resources'
-import { deleteDraftEntry, getCompanyEntry, getEntryStatus, updateAccountingEntry } from '@/lib/accounting/services'
+import { deleteDraftEntry, getCompanyEntry, getEntryStatus, listEntryBankReceipts, updateAccountingEntry } from '@/lib/accounting/services'
 import { entryLines, UpdateEntryBody } from '@/lib/api/entry-input'
 import { writeAuditLog } from '@/lib/audit'
 
 export const GET = companyRoute(
   { company: fromResource(companyOfEntry), permission: { entries: ['read'] } },
-  async ({ params, companyId }) => NextResponse.json(await getCompanyEntry(companyId, params.id as string)),
+  async ({ params, companyId, can }) => {
+    const entry = await getCompanyEntry(companyId, params.id as string)
+    const bankReceipts = can({ banking: ['read'] }) ? await listEntryBankReceipts(companyId, entry.id) : []
+    return NextResponse.json({ ...entry, bankReceipts })
+  },
 )
 
 /**

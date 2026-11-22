@@ -29,6 +29,24 @@ export async function getCompanyEntry(companyId: string, id: string): Promise<En
   return entry
 }
 
+/** Files of bank transactions linked to the entry, including direct reconciliations to an existing entry. */
+export function listEntryBankReceipts(companyId: string, entryId: string) {
+  return prisma.attachment.findMany({
+    where: {
+      companyId,
+      bankTransaction: {
+        bankAccount: { bankConnection: { companyId } },
+        OR: [
+          { reconciliationEntry: { id: entryId, companyId } },
+          { reconciled: true, reconciledWith: entryId },
+        ],
+      },
+    },
+    select: { id: true, fileName: true },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  })
+}
+
 /** Status of an entry of the company, or a 404. */
 export async function getEntryStatus(companyId: string, id: string): Promise<EntryStatus> {
   const entry = await prisma.accountingEntry.findFirst({ where: { id, companyId }, select: { status: true } })
