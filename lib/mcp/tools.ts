@@ -784,6 +784,10 @@ export function registerKledgTools(server: McpServer, access: McpAccess) {
           dueDate: invoice.dueDate,
           tiers: invoice.tiers,
           parties: invoice.parties,
+          draftSettlements: invoice.draftSettlements?.map(s => ({ entryId: s.entryId, method: s.method, date: s.date, amount: fromCents(s.amountCents) })),
+          purchaseTerms: invoice.purchaseTerms,
+          purchaseOriginal: invoice.purchaseOriginal,
+          hasAttachment: invoice.hasAttachment,
           status: invoice.status,
           lines: invoice.lines.map((l) => ({
             label: l.label,

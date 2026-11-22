@@ -81,6 +81,7 @@ export interface EditedNumber {
   origin: 'AUTO' | 'MANUAL' | 'RECORDED' | 'QONTO' | 'MANAGEMENT_FEES'
   number: string | null
   provisionalNumber: string | null
+  purchaseTerms?: import('@/lib/invoices/purchase-terms').PurchaseTerms
 }
 
 interface InvoiceFormProps {
@@ -125,6 +126,13 @@ export function InvoiceForm({ companyId, direction, invoiceId, initial, edited }
   const [numbering, setNumbering] = React.useState<NumberingInfo | null>(null)
   // Read by the resolver: whether the number is typed changes with the "Émission" choice.
   const typedRef = React.useRef(true)
+  const [pdf, setPdf] = React.useState<File | null>(null)
+  const [usd, setUsd] = React.useState(Boolean(edited?.purchaseTerms?.exchange))
+  const [originalTotal, setOriginalTotal] = React.useState(edited?.purchaseTerms?.exchange?.total ?? '')
+  const [exchangeRate, setExchangeRate] = React.useState(edited?.purchaseTerms?.exchange?.rate ?? '')
+  const [rateDate, setRateDate] = React.useState(edited?.purchaseTerms?.exchange?.date ?? '')
+  const [rateSource, setRateSource] = React.useState(edited?.purchaseTerms?.exchange?.source ?? 'BCE')
+  const [reverseRate, setReverseRate] = React.useState(String(edited?.purchaseTerms?.reverseChargeRateBp ?? ''))
   const [submitting, setSubmitting] = React.useState(false)
   const [formError, setFormError] = React.useState<string | null>(null)
 
@@ -215,7 +223,21 @@ export function InvoiceForm({ companyId, direction, invoiceId, initial, edited }
     setSubmitting(true)
     setFormError(null)
     try {
+      let stagedReceiptId: string | undefined
+      if (pdf && !invoiceId && !sale) {
+        const form = new FormData()
+        form.append('companyId', companyId)
+        form.append('file', pdf)
+        const upload = await fetch('/api/receipts/staged', { method: 'POST', body: form })
+        if (!upload.ok) throw new Error(await responseError(upload, 'Le PDF n’a pas été archivé.'))
+        stagedReceiptId = (await upload.json()).receipt.id
+      }
       const body = {
+        stagedReceiptId,
+        ...(!sale && (usd || reverseRate || edited?.purchaseTerms) ? { purchaseTerms: {
+          exchange: usd ? { currency: 'USD', total: originalTotal.replace(',', '.'), rate: exchangeRate.replace(',', '.'), date: rateDate, source: rateSource } : undefined,
+          reverseChargeRateBp: reverseRate ? Number(reverseRate) : undefined,
+        } } : {}),
         companyId,
         ...(invoiceId ? {} : { direction }),
         ...(invoiceId || !sale ? {} : { numbering: values.numbering }),
@@ -268,6 +290,27 @@ export function InvoiceForm({ companyId, direction, invoiceId, initial, edited }
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
+          {!sale ? (
+            <fieldset className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+              <legend className="mb-2 font-medium">Justificatif fournisseur</legend>
+              {!invoiceId ? <label>PDF original<Input type="file" accept="application/pdf" onChange={e => setPdf(e.target.files?.[0] ?? null)} /></label> : null}
+              <label>Autoliquidation des prestations
+                <select className="block rounded border p-2" value={reverseRate} onChange={e => setReverseRate(e.target.value)}>
+                  <option value="">Aucune</option>
+                  {FRENCH_VAT_RATES_BP.filter(r => r > 0).map(r => <option key={r} value={r}>{formatVatRate(r)}</option>)}
+                </select>
+              </label>
+              <label><input type="checkbox" checked={usd} onChange={e => setUsd(e.target.checked)} /> Original en dollars américains</label>
+              {usd ? <>
+                <label>Total TTC original (USD)<Input value={originalTotal} onChange={e => setOriginalTotal(e.target.value)} /></label>
+                <label>Cours (USD pour 1 EUR)<Input value={exchangeRate} onChange={e => setExchangeRate(e.target.value)} /></label>
+                <label>Date du cours<Input type="date" value={rateDate} onChange={e => setRateDate(e.target.value)} /></label>
+                <label>Source du cours<Input value={rateSource} onChange={e => setRateSource(e.target.value)} /></label>
+                <p className="text-sm text-muted-foreground">Saisissez les lignes en euros. Leur total sera contrôlé avec le montant original et le cours.</p>
+              </> : null}
+              <p className="text-sm text-muted-foreground">Pour une recharge de portefeuille, utilisez le compte 4091 sur la ligne concernée.</p>
+            </fieldset>
+          ) : null}
           {sale && !invoiceId ? (
             <div className="space-y-2 sm:col-span-2">
               <p className="text-sm font-medium" id="invoice-numbering-label">

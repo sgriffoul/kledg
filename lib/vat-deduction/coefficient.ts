@@ -45,9 +45,9 @@ async function regimeOn(companyId: string, company: CompanyVat, day: string): Pr
 
 export async function deductionModeOn(companyId: string, day: string): Promise<{ mode: DeductionMode; company: CompanyVat | null }> {
   const company = await prisma.company.findUnique({ where: { id: companyId }, select: { isVatExempt: true, partialVatDeduction: true, vatRegime: true } })
-  if (!company || (!company.isVatExempt && !company.partialVatDeduction)) return { mode: 'full', company }
+  if (!company) return { mode: 'full', company }
   if ((await regimeOn(companyId, company, day)) === 'franchise') return { mode: 'franchise', company }
-  return { mode: 'coefficient', company }
+  return { mode: company.isVatExempt || company.partialVatDeduction ? 'coefficient' : 'full', company }
 }
 
 export async function loadAccountSettings(companyId: string): Promise<Array<AccountSetting & { trainingOrigin: string | null }>> {

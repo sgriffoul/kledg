@@ -45,7 +45,7 @@ export default function EditInvoicePage() {
         setLoaded({
           direction: invoice.direction,
           number: invoice.number,
-          edited: { origin: invoice.origin, number: invoice.number, provisionalNumber: invoice.provisionalNumber ?? null },
+          edited: { purchaseTerms: invoice.purchaseTerms, origin: invoice.origin, number: invoice.number, provisionalNumber: invoice.provisionalNumber ?? null },
           values: {
             tiersId: invoice.tiers.id,
             number: invoice.number ?? '',

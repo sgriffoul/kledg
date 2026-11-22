@@ -389,7 +389,7 @@ export function classifyEntries(entries: VatEntry[]): VatMovements {
     const imported = -net(lines, isImportCode)
     if (autoliquidated > 0 && imported === autoliquidated) {
       // An import (44527): base on A4, tax on the import rate lines, deducted VAT of the entry on line 24
-      const baseLines = lines.filter((l) => l.code.startsWith('6') || l.code.startsWith('2'))
+      const baseLines = lines.filter((l) => (l.code.startsWith('6') && !l.code.startsWith('6352')) || l.code.startsWith('2'))
       const base = baseLines.reduce((s, l) => s + l.debitCents - l.creditCents, 0)
       const rate = inferRate(autoliquidated, base, Math.max(1, baseLines.length))
       if (rate && base > 0) addTo(m.autoliquidationImports, [{ rateBp: rate, baseCents: base, vatCents: autoliquidated }])
@@ -401,7 +401,7 @@ export function classifyEntries(entries: VatEntry[]): VatMovements {
       m.unidentified.push({ id: entry.id, number: entry.number, date: entry.date, vatCents: autoliquidated, baseCents: 0, kind: 'autoliquidation' })
     } else if (autoliquidated > 0 && art2831 === autoliquidated) {
       // A purchase of art. 283, 1 (44528): goods and services alike on B4 (CA3) or AB (CA12)
-      const baseLines = lines.filter((l) => l.code.startsWith('6') || l.code.startsWith('2'))
+      const baseLines = lines.filter((l) => (l.code.startsWith('6') && !l.code.startsWith('6352')) || l.code.startsWith('2'))
       const base = baseLines.reduce((s, l) => s + l.debitCents - l.creditCents, 0)
       const rate = inferRate(autoliquidated, base, Math.max(1, baseLines.length))
       if (rate && base > 0) addTo(m.autoliquidationArt2831, [{ rateBp: rate, baseCents: base, vatCents: autoliquidated }])
@@ -410,7 +410,7 @@ export function classifyEntries(entries: VatEntry[]): VatMovements {
       // Art. 283, 1 and other self-assessed VAT in one entry: the split by line is not known
       m.unidentified.push({ id: entry.id, number: entry.number, date: entry.date, vatCents: autoliquidated, baseCents: 0, kind: 'autoliquidation' })
     } else if (autoliquidated > 0) {
-      const baseLines = lines.filter((l) => l.code.startsWith('6') || l.code.startsWith('2'))
+      const baseLines = lines.filter((l) => (l.code.startsWith('6') && !l.code.startsWith('6352')) || l.code.startsWith('2'))
       const goods = baseLines.filter((l) => isGoodsPurchase(l.code)).reduce((s, l) => s + l.debitCents - l.creditCents, 0)
       const services = baseLines.filter((l) => !isGoodsPurchase(l.code)).reduce((s, l) => s + l.debitCents - l.creditCents, 0)
       const rate = inferRate(autoliquidated, goods + services, Math.max(1, baseLines.length))

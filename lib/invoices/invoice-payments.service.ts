@@ -144,6 +144,9 @@ async function documentedPurchaseLines(db: Db, companyId: string, invoice: Await
           original.lines.some(l => l.account.code.startsWith('512') && cents(l.credit) === Math.abs(cents(bank.amount)))) eligible.add(row.id)
     }
     const lines = row.accountingEntry.lines
+    const wallet = lines.find(l => l.account.code.startsWith('4091') && l.auxiliaryAccountNumber === aux && l.credit.gt(0))
+    const exchange = lines.find(l => (l.account.code.startsWith('656') && l.debit.gt(0)) || (l.account.code.startsWith('756') && l.credit.gt(0)))
+    if (!bank && lines.length === 3 && wallet && exchange && row.debit.plus(exchange.debit).eq(wallet.credit.plus(exchange.credit))) eligible.add(row.id)
     if (!bank && lines.length === 2 && lines.some(l => l.account.code.startsWith('4091') &&
         l.auxiliaryAccountNumber === aux && cents(l.credit) === cents(row.debit))) eligible.add(row.id)
   }

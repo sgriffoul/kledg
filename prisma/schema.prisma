@@ -1980,6 +1980,7 @@ model Invoice {
   buyerSiren           String?
   buyerVatNumber       String?
   unitemizedAmount     Decimal          @default(0) @db.Decimal(15, 2)
+  purchaseTerms Json?
   purchaseOriginal     Json?
   totalExclTax         Decimal          @db.Decimal(15, 2)
   totalVat             Decimal          @db.Decimal(15, 2)

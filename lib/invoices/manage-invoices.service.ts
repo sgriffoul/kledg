@@ -41,6 +41,7 @@ import { writeAuditLog } from '@/lib/audit'
 import { dayToDate } from '@/lib/accounting/entry-date'
 import { getPaymentTerms } from '@/lib/companies/payment-terms.service'
 import { termsOfTiers } from '@/lib/tiers/manage-tiers.service'
+import { checkPurchaseTerms, isAdvance, purchaseTermsSchema } from './purchase-terms'
 import { accountCodeError } from '@/lib/tiers/rules'
 import { calendarDayOf, formatIsoDateFr } from '@/lib/utils/date'
 import { centsToDecimal, parseCents } from '@/lib/utils/money'
@@ -71,6 +72,7 @@ const lineSchema = z.object({
 })
 
 const invoiceFields = {
+  purchaseTerms: purchaseTermsSchema.optional(),
   tiersId: z.string({ error: 'Choisissez le tiers' }).min(1, 'Choisissez le tiers').max(64),
   /** Absent for a sales invoice numbered by Kledg's series or by Qonto. */
   number: z.string({ error: 'Numéro invalide' }).trim().min(1, 'Le numéro est requis').max(60).nullish(),
@@ -311,6 +313,7 @@ export async function listInvoices(companyId: string, query: ListInvoicesQuery &
 const DETAIL_SELECT = {
   ...SUMMARY_SELECT,
   purchaseOriginal: true,
+  purchaseTerms: true,
   sellerSiren: true,
   sellerVatNumber: true,
   buyerSiren: true,
@@ -347,23 +350,32 @@ export async function getInvoice(companyId: string, id: string, db: Db = prisma)
   const draftSettlements = row.direction === 'PURCHASE' && row.number && row.entryId
     ? await db.entryLine.findMany({
         where: {
-          accountingEntry: { companyId, status: 'draft', reference: row.number, journal: { code: 'OD' } },
-          account: { code: row.tiers.collectiveAccountCode ?? '401' },
+          accountingEntry: { companyId, status: 'draft', reference: row.number, journal: { code: { in: ['BQ', 'OD'] } } },
+          account: { code: row.tiers.collectiveAccountCode ?? { startsWith: '401' } },
           auxiliaryAccountNumber: row.tiers.auxiliaryAccountNumber,
-          settlementBank: { reconciled: true, bankAccount: { bankConnection: { companyId } } },
+          OR: [
+            { settlementBank: { reconciled: true, bankAccount: { bankConnection: { companyId } } } },
+            { accountingEntry: { sourceBankTransaction: { reconciled: true } } },
+            { accountingEntry: { journal: { code: 'OD' }, lines: { some: {
+              account: { code: { startsWith: '4091' } }, credit: { gt: 0 }, auxiliaryAccountNumber: row.tiers.auxiliaryAccountNumber,
+            } } } },
+          ],
           debit: { gt: 0 },
         },
-        select: { id: true, debit: true, settlementBank: { select: { date: true } }, accountingEntry: { select: { entryNumber: true } } },
+        select: { id: true, debit: true, settlementBank: { select: { date: true } }, accountingEntry: { select: { id: true, entryNumber: true, date: true, sourceBankTransaction: { select: { date: true } } } } },
         orderBy: { settlementBank: { date: 'asc' } },
       })
     : []
   return {
     ...summaryOf(row),
     draftSettlements: draftSettlements.map(line => ({
-      id: line.id, amountCents: cents(line.debit), bankDate: calendarDayOf(line.settlementBank!.date),
+      id: line.id, entryId: line.accountingEntry.id, amountCents: cents(line.debit),
+      method: line.settlementBank || line.accountingEntry.sourceBankTransaction ? 'bank' : 'wallet',
+      date: calendarDayOf(line.settlementBank?.date ?? line.accountingEntry.sourceBankTransaction?.date ?? line.accountingEntry.date),
       entryNumber: line.accountingEntry.entryNumber,
     })),
     purchaseOriginal: row.purchaseOriginal,
+    purchaseTerms: row.purchaseTerms,
     provisionalNumber,
     numberAssignedAt: row.numberAssignedAt?.toISOString() ?? null,
     tiers: row.tiers,
@@ -428,7 +440,7 @@ function prepareLines(
     if (direction === 'SALE' && company.isVatExempt && line.vatRateBp !== 0) {
       errors.push(`Ligne ${n} : la société bénéficie de la franchise en base de TVA (CGI art. 293 B) : ses ventes sont sans TVA.`)
     }
-    if (line.accountCode) {
+    if (line.accountCode && !(direction === 'PURCHASE' && isAdvance(line.accountCode))) {
       const error = accountCodeError(kind, 'line', line.accountCode)
       if (error) errors.push(`Ligne ${n} : ${error}`)
     }
@@ -594,6 +606,7 @@ export async function createInvoice(
     const company = await loadCompany(tx, companyId)
     const tiers = await loadTiersForInvoice(tx, companyId, input.tiersId, input.direction)
     const { prepared, totals } = prepareLines(input.direction, input.lines, company)
+    checkPurchaseTerms(input.purchaseTerms, input.direction, input.issueDate, totals.totalInclTaxCents, input.lines)
     const origin = options.origin ?? (await originOfNewInvoice(tx, companyId, input.direction, input.numbering))
     const number = numberForOrigin(origin, input.number)
     await lockInvoiceNumbers(tx, companyId)
@@ -629,6 +642,7 @@ export async function createInvoice(
         typeCode: input.typeCode,
         label: input.label ?? null,
         ...document,
+        purchaseTerms: input.purchaseTerms,
         ...partiesOf(input.direction, company, tiers),
         ...amountData(totals),
         lines: { create: lineRows(prepared, totals) },
@@ -671,6 +685,8 @@ export async function lockInvoice(tx: Prisma.TransactionClient, companyId: strin
       externalId: true,
       documentFileId: true,
       purchaseOriginal: true,
+      purchaseTerms: true,
+      totalInclTax: true,
     },
   })
   return invoice
@@ -709,6 +725,8 @@ export async function updateInvoice(companyId: string, id: string, input: Update
     const company = await loadCompany(tx, companyId)
     const tiers = await loadTiersForInvoice(tx, companyId, input.tiersId, current.direction)
     const { prepared, totals } = prepareLines(current.direction, input.lines, company)
+    const terms = input.purchaseTerms ?? (current.purchaseTerms ? purchaseTermsSchema.parse(current.purchaseTerms) : undefined)
+    checkPurchaseTerms(terms, current.direction, input.issueDate, totals.totalInclTaxCents, input.lines)
     await lockInvoiceNumbers(tx, companyId)
     if (number) {
       await assertNumberFree(tx, companyId, current.direction, tiers.id, number, id)
@@ -727,6 +745,7 @@ export async function updateInvoice(companyId: string, id: string, input: Update
         typeCode: input.typeCode,
         label: input.label ?? null,
         ...partiesOf(current.direction, company, tiers),
+        purchaseTerms: terms,
         ...amountData(totals),
         lines: { create: lineRows(prepared, totals) },
         vatBreakdown: { create: breakdownRows(totals) },
@@ -751,7 +770,7 @@ export async function updateInvoiceLineAccounts(companyId: string, id: string, i
       if (!line) throw new NotFoundError('Ligne de facture introuvable')
       const code = change.accountCode !== undefined ? change.accountCode : line.accountCode
       const fixedAsset = change.fixedAsset ?? line.fixedAsset
-      if (code) {
+      if (code && !(current.direction === 'PURCHASE' && isAdvance(code))) {
         const error = accountCodeError(kind, 'line', code)
         if (error) errors.push(error)
       }

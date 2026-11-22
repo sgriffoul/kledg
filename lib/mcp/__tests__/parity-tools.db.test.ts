@@ -556,6 +556,21 @@ describe.skipIf(!available)('MCP tools covering the API', () => {
       expect(await prisma.tiers.count({ where: { id: created.tiersId } })).toBe(0)
     })
 
+    it('stages a supplier PDF and records its original USD total through the MCP', async () => {
+      const key = await apiKey('admin')
+      const companyId = ids.aCompany
+      const supplier = await ok(key, 'manage_tiers', { companyId, action: 'create', tiers: { kind: 'SUPPLIER', name: 'Example USD' } })
+      const content = Buffer.from('%PDF-1.4\nInvoice example\n%%EOF').toString('base64')
+      const staged = await ok(key, 'stage_receipt', { companyId, contentBase64: content, fileName: 'EX-USD.pdf' })
+      const purchaseTerms = { exchange: { currency: 'USD', total: '12.00', rate: '1.2', date: '2025-03-14', source: 'BCE' } }
+      const created = await ok(key, 'create_draft_invoice', { companyId, direction: 'PURCHASE', tiers: supplier.tiersId, number: 'EX-USD',
+        issueDate: '2025-03-15', stagedReceiptId: staged.stagedReceiptId, purchaseTerms,
+        lines: [{ label: 'Service', quantity: 1, unitPrice: 10, vatRate: 0, accountCode: '606100' }] })
+      const invoiceId = created.invoiceId
+      const read = await ok(key, 'get_invoice', { companyId, invoiceId })
+      expect(read).toMatchObject({ purchaseTerms, hasAttachment: true, totalInclTax: 10 })
+    })
+
     it('edits a draft invoice, posts it, unposts it and deletes it', async () => {
       const admin = await apiKey('admin')
       const writer = await apiKey('write')

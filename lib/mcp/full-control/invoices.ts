@@ -11,6 +11,8 @@
  * automatic): the dry run shows the totals the invoice would have.
  */
 
+import { adoptPurchase } from '@/lib/invoices/adopt-purchase.service'
+import { purchaseTermsSchema, checkPurchaseTerms } from '@/lib/invoices/purchase-terms'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { NotFoundError, ValidationError } from '@/lib/accounting/errors'
@@ -31,6 +33,7 @@ import { ACTS_AS_USER, TWO_STEP } from './descriptions'
 import { companyLock, rowTargets } from './fingerprint'
 
 const input = {
+  purchaseTerms: purchaseTermsSchema.optional().describe("Purchase only. Lines in EUR, original USD gross total and dated units per EUR. Reverse charge rate in basis points for untaxed service lines. A wallet top-up uses line account 4091."),
   stagedReceiptId: z.string().min(1).max(100).optional().describe('Purchase only: original PDF from stage_receipt, filed with the invoice.'),
   direction: z.enum(['SALE', 'PURCHASE']).describe('SALE: invoice issued to a customer (journal VE); PURCHASE: invoice received from a supplier (journal AC).'),
   tiers: z.string().min(1).max(64).describe('Tiers id or auxiliary account number, from list_tiers (a customer for a sale, a supplier for a purchase).'),
@@ -132,6 +135,7 @@ const createDraftInvoiceTool = fullControlTool({
     const lines = linesOf(args)
     const totals = computeInvoiceTotals(lines)
     assertInvoiceAmountsFit(totals)
+    checkPurchaseTerms(args.purchaseTerms, args.direction, args.issueDate, totals.totalInclTaxCents, lines)
     const problems: string[] = []
     if ((args.direction === 'SALE') !== (tiers.kind === 'CUSTOMER')) problems.push(args.direction === 'SALE' ? 'Une facture de vente s’adresse à un client.' : 'Une facture d’achat vient d’un fournisseur.')
     if (receipt && (args.direction !== 'PURCHASE' || args.numbering || args.qontoStatus || !receipt.fileId || receipt.status !== 'staged' || receipt.contentType !== 'application/pdf' || receipt.expiresAt <= new Date())) {
@@ -148,6 +152,7 @@ const createDraftInvoiceTool = fullControlTool({
       totalInclTax: fromCents(totals.totalInclTaxCents),
       vatBreakdown: totals.breakdown.map((row) => ({ ratePercent: row.vatRateBp / 100, base: fromCents(row.baseCents), vat: fromCents(row.vatCents) })),
       ...(receipt ? { document: { fileName: receipt.fileName, sha256: receipt.sha256 } } : {}),
+      purchaseTerms: args.purchaseTerms,
       willPost: args.post,
       problems,
     }
@@ -159,6 +164,7 @@ const createDraftInvoiceTool = fullControlTool({
       {
         direction: args.direction,
         tiersId: tiers.id,
+        purchaseTerms: args.purchaseTerms,
         number: args.number ?? null,
         numbering: args.numbering,
         qontoStatus: args.qontoStatus,
@@ -252,7 +258,31 @@ const importEInvoiceTool = fullControlTool({
   audit: ({ fileName }, result) => ({ invoiceId: result.invoiceId, created: result.created, fileName }),
 })
 
+const adoptPurchaseTool = fullControlTool({
+  name: 'adopt_purchase',
+  title: 'Reprendre une pièce fournisseur déjà comptabilisée',
+  description: `Links a historical supplier PDF and its verified entry to a native purchase invoice. A documented prepayment may require a pair of draft entries. For new purchases use create_draft_invoice. ${ACTS_AS_USER} ${TWO_STEP}`,
+  input: {
+    attachmentId: z.string().min(1).max(64),
+    quote: z.object({ rate: z.string().max(20), date: z.iso.date(), source: z.string().trim().min(1).max(80) }).optional(),
+  },
+  permission: { entries: ['create'], banking: ['read'] },
+  amounts: 'none',
+  never: 'validates an entry.',
+  confirmation: true,
+  idempotent: true,
+  targetState: ({ companyId, attachmentId }) => [companyLock(companyId), ...rowTargets('attachments', companyId, attachmentId)],
+  async preview({ companyId, attachmentId, quote }) {
+    const file = await prisma.attachment.findFirstOrThrow({ where: { id: attachmentId, companyId, supplier: { kind: 'SUPPLIER' },
+      expenseLines: { none: {} } }, select: { fileName: true, providerData: true } })
+    return { attachmentId, fileName: file.fileName, purchaseDocument: z.object({ purchaseDocument: z.unknown() }).parse(file.providerData).purchaseDocument, quote }
+  },
+  execute: async ({ companyId, attachmentId, quote }) => ({ invoiceId: await adoptPurchase(companyId, attachmentId, quote) }),
+  audit: ({ attachmentId }, result) => ({ attachmentId, invoiceId: result.invoiceId }),
+})
+
 export function registerInvoiceTools(register: RegisterTool) {
+  register(adoptPurchaseTool)
   register(createDraftInvoiceTool)
   register(importEInvoiceTool)
 }

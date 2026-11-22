@@ -1,3 +1,5 @@
+import { z } from 'zod'
+import { routeReceiptActor } from '@/lib/receipts/actor'
 import { NextResponse } from 'next/server'
 import { companyRoute, fromBody, fromQuery } from '@/lib/api/route'
 import { NO_CACHE_HEADERS } from '@/lib/api/cache-headers'
@@ -26,6 +28,10 @@ export const GET = companyRoute(
  * with its own number (recorded, or kledg when numbers are typed).
  */
 export const POST = companyRoute(
-  { company: fromBody(), permission: { entries: ['create'] }, body: CreateInvoiceBodySchema },
-  async ({ companyId, body }) => NextResponse.json(await issueInvoice(companyId, body), { status: 201 }),
+  { company: fromBody(), permission: { entries: ['create'] }, body: CreateInvoiceBodySchema.extend({ stagedReceiptId: z.string().min(1).max(100).optional() }) },
+  async (ctx) => {
+    const { stagedReceiptId, ...input } = ctx.body
+    const purchaseReceipt = stagedReceiptId ? { id: stagedReceiptId, actor: routeReceiptActor(ctx) } : undefined
+    return NextResponse.json(await issueInvoice(ctx.companyId, input, { purchaseReceipt }), { status: 201 })
+  },
 )

@@ -22,6 +22,7 @@
  */
 
 import type { Prisma } from '@prisma/client'
+import { isAdvance, purchaseTermsSchema, checkPurchaseTerms } from './purchase-terms'
 import { prisma } from '@/lib/prisma'
 import { ensureAccounts, ensureJournal } from '@/lib/accounting/fiscal-year-closure/ledger'
 import { loadRootAccount } from '@/lib/accounting/root-account'
@@ -107,6 +108,7 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
         typeCode: true,
         issueDate: true,
         totalInclTax: true,
+        purchaseTerms: true,
         tiers: { select: { name: true, auxiliaryAccountNumber: true, collectiveAccountCode: true, defaultAccountCode: true, vatOnDebits: true } },
         lines: { orderBy: { position: 'asc' }, select: { label: true, totalExclTax: true, vatRateBp: true, accountCode: true, nature: true, fixedAsset: true } },
         vatBreakdown: { select: { vatRateBp: true, baseAmount: true, vatAmount: true } },
@@ -128,6 +130,8 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
     }
     assertEntryWritableInFiscalYear(fiscalYear, day, 'create')
 
+    const terms = invoice.purchaseTerms ? purchaseTermsSchema.parse(invoice.purchaseTerms) : undefined
+    checkPurchaseTerms(terms, invoice.direction, day, cents(invoice.totalInclTax), invoice.lines)
     const unknownRate = invoice.vatBreakdown.find((row) => !isFrenchVatRate(row.vatRateBp))
     if (unknownRate) {
       throw new ValidationError(
@@ -148,7 +152,7 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
       const typed = line.accountCode ?? invoice.tiers.defaultAccountCode
       const code = typed ?? (invoice.direction === 'SALE' ? DEFAULT_SALE_ACCOUNT[line.nature] : null)
       if (!code) throw new ValidationError(`Ligne ${i + 1}\u00a0: choisissez le compte de charge de la ligne (ex. 6064), ou un compte par défaut sur le fournisseur.`)
-      if (invoice.direction === 'PURCHASE' && !(code.startsWith('6') || code.startsWith('2'))) {
+      if (invoice.direction === 'PURCHASE' && !(code.startsWith('6') || code.startsWith('2') || isAdvance(code))) {
         throw new ValidationError(`Ligne ${i + 1}\u00a0: le compte ${code} n’est pas un compte de charges ou d’immobilisations.`)
       }
       if (invoice.direction === 'SALE' && !code.startsWith('7')) throw new ValidationError(`Ligne ${i + 1}\u00a0: le compte ${code} n’est pas un compte de produits.`)
@@ -211,6 +215,30 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
       deductionPercent,
     })
 
+    const advanceIds = new Set(lineCodes.filter(l => isAdvance(l.code)).map(l => byCode.get(l.code)!.id))
+    for (const line of plan.lines) {
+      if (advanceIds.has(line.accountId)) {
+        line.auxiliaryAccountNumber = invoice.tiers.auxiliaryAccountNumber
+        line.auxiliaryAccountLabel = invoice.tiers.name
+      }
+    }
+    if (terms?.reverseChargeRateBp) {
+      const vat = invoice.totalInclTax.times(terms.reverseChargeRateBp).div(100).toDecimalPlaces(0).toNumber()
+      const recovered = Math.round(vat * (deductionPercent ?? (company.isVatExempt ? 0 : 100)) / 100)
+      const creditNote = invoice.typeCode === '381'
+      for (const [root, label, signed] of [
+        ['4452', 'TVA due sur prestations autoliquidées', -vat],
+        ['44566', 'TVA déductible sur prestations', recovered],
+        ['6352', 'TVA non récupérable', vat - recovered],
+      ] as const) {
+        if (!signed) continue
+        const account = await accountByRoot(tx, companyId, fiscalYear, root, label)
+        if (root === '4452' && !/^44520*$/.test(account.code)) throw new ValidationError('Un compte générique 4452 est requis pour les prestations autoliquidées.')
+        const amount = creditNote ? -signed : signed
+        plan.lines.push({ accountId: account.id, description: label, debitCents: Math.max(0, amount), creditCents: Math.max(0, -amount) })
+      }
+    }
+
     const entry = await createEntryInTx(tx, {
       companyId,
       journalId: journal.id,
@@ -222,6 +250,10 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
       status: 'draft',
       lines: plan.lines.map((line) => ({
         accountId: line.accountId,
+        ...(terms?.exchange && (line.accountId === tiersAccount.id || advanceIds.has(line.accountId)) ? {
+          currencyCode: terms.exchange.currency,
+          currencyAmount: line.creditCents ? '-' + terms.exchange.total : terms.exchange.total,
+        } : {}),
         debit: centsToDecimal(line.debitCents),
         credit: centsToDecimal(line.creditCents),
         description: line.description,

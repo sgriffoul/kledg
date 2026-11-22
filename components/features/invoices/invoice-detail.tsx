@@ -35,6 +35,7 @@ interface Detail {
   dueDate: string
   label: string | null
   status: InvoiceStatus
+  purchaseTerms?: { exchange?: { total: string; currency: string; rate: string; date: string; source: string }; reverseChargeRateBp?: number } | null
   purchaseOriginal?: { currency: string; total: string; rate: string; rateDate: string; source: string; net: string | null } | null
   source: 'MANUAL' | 'QONTO' | 'E_INVOICE'
   externalStatus: string | null
@@ -53,7 +54,7 @@ interface Detail {
   /** Mentions of the exempt lines (CGI ann. II art. 242 nonies A, I, 12°). */
   vatExemptionMentions?: Array<{ code: string; text: string; positions: number[] }>
   vatBreakdown: Array<{ vatRateBp: number; baseCents: number; vatCents: number }>
-  draftSettlements?: Array<{ id: string; amountCents: number; bankDate: string; entryNumber: string }>
+  draftSettlements?: Array<{ id: string; entryId: string; amountCents: number; date: string; method: string; entryNumber: string }>
   payments: Array<{ id: string; bankDate?: string | null; amountCents: number; entry: { id: string; entryNumber: string; date: string; description: string | null }; vatTransferEntry: { id: string; entryNumber: string; status: string } | null }>
 }
 
@@ -82,6 +83,8 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
   const { confirm, dialog } = useConfirm()
   const [invoice, setInvoice] = React.useState<Detail | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const [transaction, setTransaction] = React.useState('')
+  const [paymentDay, setPaymentDay] = React.useState('')
   const [busy, setBusy] = React.useState(false)
   const [candidates, setCandidates] = React.useState<Candidate[] | null>(null)
   const [accounts, setAccounts] = React.useState<Record<string, string>>({})
@@ -118,11 +121,11 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
     }
   }, [invoice, invoiceId])
 
-  const run = async (action: () => Promise<unknown>, success: string) => {
+  const run = async (action: () => Promise<unknown>, success?: string) => {
     setBusy(true)
     try {
       await action()
-      toast.success(success)
+      if (success) toast.success(success)
       reload()
     } catch (e) {
       toast.error((e as Error).message)
@@ -203,6 +206,17 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
       () => send(`/api/invoices/${invoiceId}/lines`, 'PATCH', { lines: invoice.lines.map((l) => ({ id: l.id, accountCode: accounts[l.id] || null })) }),
       'Comptes enregistrés',
     )
+  const preparePayment = (method: 'bank' | 'wallet') => run(async () => {
+    const settlement = method === 'bank' ? { method, transactionId: transaction.trim() } : { method, date: paymentDay }
+    const url = `/api/invoices/${invoiceId}/prepare-payment`
+    const plan = await send(url, 'POST', { settlement, preview: true }) as { lines: Array<{ accountCode: string; debit: number; credit: number }> }
+    const ok = await confirm({ title: 'Préparer le règlement intégral ?', confirmLabel: 'Créer le brouillon',
+      description: plan.lines.map(l => `${l.accountCode} · ${l.debit ? 'débit' : 'crédit'} ${(l.debit || l.credit).toFixed(2)} €`).join(' / ') })
+    if (ok) {
+      await send(url, 'POST', { settlement, preview: false })
+      toast.success('Écriture de règlement préparée en brouillon')
+    }
+  })
   const recordPayment = (entryLineId: string) =>
     run(async () => {
       const result = (await send(`/api/invoices/${invoiceId}/payments`, 'POST', { entryLineId })) as { letteringPending: string | null; lettered: boolean; letteringCode: string | null }
@@ -305,6 +319,8 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
               Numéro attribué à l’émission{invoice.provisionalNumber ? ` (prochain prévu : ${invoice.provisionalNumber})` : ''}
             </span>
           ) : null}
+          {invoice.purchaseTerms?.exchange ? <p>Original {invoice.purchaseTerms.exchange.total} USD · 1 EUR = {invoice.purchaseTerms.exchange.rate} USD ({invoice.purchaseTerms.exchange.source}, <DateDisplay value={invoice.purchaseTerms.exchange.date} />)</p> : null}
+          {invoice.purchaseTerms?.reverseChargeRateBp ? <p>Autoliquidation des prestations · {invoice.purchaseTerms.reverseChargeRateBp / 100} %</p> : null}
           {invoice.purchaseOriginal && invoice.purchaseOriginal.currency !== 'EUR' ? (
             <span className="text-muted-foreground text-sm">
               Original {invoice.purchaseOriginal.total} {invoice.purchaseOriginal.currency} · 1 EUR = {invoice.purchaseOriginal.rate} {invoice.purchaseOriginal.currency}
@@ -506,13 +522,21 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
           </CardHeader>
           <CardContent className="space-y-4">
             {!posted ? <p className="text-muted-foreground text-sm">Comptabilisez la facture pour enregistrer ses règlements.</p> : null}
+            {!sale && posted && !invoice.purchaseOriginal && invoice.typeCode === '380' && !invoice.paidCents && !invoice.draftSettlements?.length && invoice.remainingCents > 0 && can({ entries: ['create'], banking: ['reconcile'] }) ? (
+              <div className="grid gap-3">
+                <label>Identifiant du débit bancaire (règlement intégral)<Input value={transaction} onChange={e => setTransaction(e.target.value)} /></label>
+                <Button variant="outline" disabled={busy || !transaction.trim()} onClick={() => preparePayment('bank')}>Préparer le règlement bancaire</Button>
+                <label>Date d’utilisation du crédit fournisseur<Input type="date" value={paymentDay} onChange={e => setPaymentDay(e.target.value)} /></label>
+                <Button variant="outline" disabled={busy || !paymentDay} onClick={() => preparePayment('wallet')}>Imputer le portefeuille</Button>
+              </div>
+            ) : null}
             {invoice.draftSettlements?.length ? (
               <div className="space-y-2">
-                <p className="text-sm font-medium">Règlements bancaires rapprochés en attente de validation comptable</p>
+                <p className="text-sm font-medium">Règlements en attente de validation comptable</p>
                 <ul className="divide-y rounded-md border">
                   {invoice.draftSettlements.map(line => (
                     <li key={line.id} className="flex justify-between gap-3 px-3 py-2 text-sm">
-                      <span><DateDisplay value={line.bankDate} /> · Écriture n° {line.entryNumber}</span>
+                      <span><DateDisplay value={line.date} /> · {line.method === 'bank' ? 'Banque' : 'Portefeuille'} · <Link className="underline" href={`/${companyId}/entries/${line.entryId}`}>Écriture n° {line.entryNumber}</Link></span>
                       <Amount value={line.amountCents / 100} />
                     </li>
                   ))}

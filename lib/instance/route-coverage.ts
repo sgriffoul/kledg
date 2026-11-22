@@ -10,4 +10,7 @@
 
 export type InstanceRouteCoverage = { tools: readonly string[] } | { excluded: string }
 
-export const INSTANCE_ROUTE_COVERAGE: Readonly<Record<string, InstanceRouteCoverage>> = {}
+export const INSTANCE_ROUTE_COVERAGE: Readonly<Record<string, InstanceRouteCoverage>> = {
+  'POST /api/invoices/[id]/prepare-payment': { tools: ['manage_invoice'] },
+  'POST /api/invoices/adopt-purchase': { tools: ['adopt_purchase'] },
+}

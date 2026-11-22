@@ -90,6 +90,7 @@ export async function qontoFirstActive(companyId: string): Promise<boolean> {
  */
 export async function issueInvoice(companyId: string, input: CreateInvoiceInput, options: Pick<NonNullable<Parameters<typeof createInvoice>[2]>, 'source' | 'purchaseReceipt'> = {}): Promise<InvoiceDetail> {
   if (options.purchaseReceipt && (input.direction !== 'PURCHASE' || input.numbering || input.qontoStatus)) throw new ValidationError('Le PDF doit accompagner une facture fournisseur.')
+  if (input.purchaseTerms && (input.direction !== 'PURCHASE' || input.numbering || input.qontoStatus)) throw new ValidationError('Options réservées aux achats fournisseur.')
   let choice = input.numbering
   if (input.qontoStatus && choice && choice !== 'qonto') {
     throw new ValidationError('Le statut dans Qonto (brouillon ou finalisée) ne vaut que pour une facture créée dans Qonto.')

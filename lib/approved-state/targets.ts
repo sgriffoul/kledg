@@ -96,6 +96,7 @@ export const TABLES = {
     company: (companyId) => Prisma.sql`"organizationId" IN (SELECT "id" FROM "organization" WHERE "companyId" = ${companyId})`,
     columns: ID,
   },
+  attachments: { from: Prisma.sql`"attachments"`, company: byCompany, columns: ID },
   staged_receipts: { from: Prisma.sql`"staged_receipts"`, company: byCompany, columns: ID },
 } as const satisfies Record<string, TableSpec>
 

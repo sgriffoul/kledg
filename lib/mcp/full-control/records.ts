@@ -37,6 +37,7 @@ import { deleteDepreciationRecord, postDepreciationRecord } from '@/lib/fixed-as
 import { cancelDisposal, previewDisposal, recordDisposal, RecordDisposalSchema } from '@/lib/fixed-assets/record-disposal.service'
 import { fullControlTool, type RegisterTool } from './define'
 import { companyLock, expenseReportTarget, invoiceTarget, rowTargets } from './fingerprint'
+import { preparePurchasePayment, settlementInput } from '@/lib/invoices/prepare-purchase-payment'
 import { ACTS_AS_USER, TWO_STEP } from './descriptions'
 import { accountIdsByCode, ownedFiscalYear } from './resolve'
 
@@ -52,13 +53,15 @@ const manageInvoiceTool = fullControlTool({
   title: 'Comptabiliser, régler ou supprimer une facture',
   description: `Acts on an invoice, like its page: post creates its entry as a draft (AC or VE journal) in the fiscal year of its date; unpost deletes that draft entry (the invoice is a draft again; refused once validated or paid); delete deletes a draft invoice; record_payment records a bank payment (entryLineId: a line of a validated, reconciled entry, from payment_candidates) and letters the invoice once its payments cover it; remove_payment removes a payment (paymentId, from get_invoice); settle letters an invoice whose recorded payments cover it; payment_candidates lists the bank lines that may pay it (read only); resume_qonto resumes the creation in Qonto of an invoice whose answer from Qonto was lost (qontoPending in get_invoice): Kledg looks for it at Qonto first and never creates it twice. A sales invoice numbered by Kledg's series gets its number when posted and keeps it; it cannot be deleted then (a credit note cancels it). Create one with create_draft_invoice, edit a draft with update_draft_invoice. ${ACTS_AS_USER} Every action but payment_candidates is high impact: ${TWO_STEP}`,
   input: {
-    action: z.enum(['post', 'unpost', 'delete', 'record_payment', 'remove_payment', 'settle', 'payment_candidates', 'resume_qonto']),
+    settlement: settlementInput.optional().describe('prepare_purchase_payment: full settlement against a EUR bank debit, or available supplier wallet credit on the given date.'),
+    action: z.enum(['prepare_purchase_payment', 'post', 'unpost', 'delete', 'record_payment', 'remove_payment', 'settle', 'payment_candidates', 'resume_qonto']),
     invoiceId: z.string().min(1).max(64).describe('Invoice id, from list_invoices.'),
     entryLineId: z.string().max(64).optional().describe('record_payment: the bank line.'),
     paymentId: z.string().max(64).optional().describe('remove_payment: the payment.'),
   },
   permission: { entries: ['read'] },
   actions: {
+    prepare_purchase_payment: { entries: ['create'], banking: ['reconcile'] },
     post: { entries: ['create'] },
     unpost: { entries: ['delete'] },
     delete: { entries: ['delete'] },
@@ -70,18 +73,22 @@ const manageInvoiceTool = fullControlTool({
   amounts: 'euros',
   never: 'validates an entry or changes a validated entry.',
   confirmation: true,
-  highImpactActions: ['post', 'unpost', 'delete', 'record_payment', 'remove_payment', 'settle', 'resume_qonto'],
+  highImpactActions: ['prepare_purchase_payment', 'post', 'unpost', 'delete', 'record_payment', 'remove_payment', 'settle', 'resume_qonto'],
   destructive: true,
   // resume_qonto calls Qonto
   openWorld: true,
   // The approval covers the invoice as the user saw it: an edit (update_draft_invoice) before the execution refuses it.
-  targetState: ({ companyId, invoiceId }) => invoiceTarget(companyId, invoiceId),
-  async preview({ companyId, action, invoiceId, entryLineId, paymentId }) {
+  targetState: ({ companyId, invoiceId, settlement }) => [...invoiceTarget(companyId, invoiceId),
+    ...rowTargets('bank_transactions', companyId, settlement?.method === 'bank' ? settlement.transactionId : undefined)],
+  async preview({ companyId, action, invoiceId, entryLineId, paymentId, settlement }) {
+    if (action === 'prepare_purchase_payment') return { action, ...await preparePurchasePayment(companyId, invoiceId, settlementInput.parse(settlement), true) }
     const invoice = forAssistant(await getInvoice(companyId, invoiceId)) as Record<string, unknown>
     return { action, invoice: { id: invoice.id, number: invoice.number, direction: invoice.direction, status: invoice.status, totalInclTax: invoice.totalInclTax, remaining: invoice.remaining }, entryLineId: entryLineId ?? null, paymentId: paymentId ?? null }
   },
-  async execute({ companyId, action, invoiceId, entryLineId, paymentId }) {
+  async execute({ companyId, action, invoiceId, entryLineId, paymentId, settlement }) {
     switch (action) {
+      case 'prepare_purchase_payment':
+        return { action, ...await preparePurchasePayment(companyId, invoiceId, settlementInput.parse(settlement)) }
       case 'payment_candidates':
         return { action, candidates: forAssistant(await listPaymentCandidates(companyId, invoiceId)) }
       case 'post':

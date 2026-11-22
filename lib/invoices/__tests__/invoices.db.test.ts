@@ -83,6 +83,62 @@ describe.skipIf(!available)('purchase and sales ledger (PostgreSQL)', () => {
     await prisma?.$disconnect()
   })
 
+  it('records an original USD supplier invoice, applies the dated VAT regime and posts a named wallet advance', async () => {
+    const { companyId, supplierId, fiscalYearId } = books
+    for (const code of ['6352', '4091', '4452']) await prisma.account.create({ data: { companyId, fiscalYearId, code, label: code } })
+    await prisma.company.update({ where: { id: companyId }, data: { vatRegime: 'simplified', isVatExempt: false } })
+    await prisma.taxRegimeHistory.create({ data: {
+      companyId, regimeType: 'vat', regime: 'franchise', startDate: new Date('2026-01-01'), endDate: new Date('2026-06-30'),
+    } })
+    const purchase = { direction: 'PURCHASE' as const, typeCode: '380' as const, tiersId: supplierId,
+      issueDate: '2026-05-01', number: 'USD-1', lines: [line('Service', '1', 1000, 0, { accountCode: '6241' })],
+      purchaseTerms: { exchange: { currency: 'USD' as const, total: '12', rate: '1.2', date: '2026-04-30', source: 'BCE' }, reverseChargeRateBp: 2000 } }
+    for (const [number, issueDate, debitCode] of [['USD-1','2026-05-01','6352'], ['USD-2','2026-07-01','445660']]) {
+      const doc = await invoices.createInvoice(companyId, { ...purchase, number, issueDate })
+      const posted = await posting.postInvoice(companyId, doc.id)
+      expect(await entryLines(posted.entryId)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: '4452', credit: '2' }), expect.objectContaining({ code: debitCode, debit: '2' }),
+        expect.objectContaining({ code: '401000', credit: '10', aux: 'F00001' }),
+      ]))
+    }
+    await expect(invoices.createInvoice(companyId, { ...purchase, number: 'WRONG-FX', lines: [line('X','1',1250,0)] })).rejects.toThrow(/cours/)
+    const wallet = await invoices.createInvoice(companyId, { ...purchase, number: 'TOPUP', purchaseTerms: undefined,
+      lines: [line('Recharge', '1', 2500, 0, { accountCode: '4091' })] })
+    const posted = await posting.postInvoice(companyId, wallet.id)
+    expect(await entryLines(posted.entryId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: '4091', debit: '25', aux: 'F00001' }), expect.objectContaining({ code: '401000', credit: '25', aux: 'F00001' }),
+    ]))
+  })
+
+  it('clears new wallet and USD purchases through 401, with a balanced bank FX difference and replay protection', async () => {
+    const { preparePurchasePayment } = await import('../prepare-purchase-payment')
+    const { companyId, supplierId, fiscalYearId } = books
+    for (const code of ['4091', '656', '756']) await prisma.account.create({ data: { companyId, fiscalYearId, code, label: code } })
+    const invoice = async (number: string, code: string, euroCents = 1000, rate = '1.2') => {
+      const doc = await invoices.createInvoice(companyId, { direction: 'PURCHASE', typeCode: '380', tiersId: supplierId,
+        issueDate: '2026-05-01', number, lines: [line('Services', '1', euroCents, 0, { accountCode: code })],
+        purchaseTerms: { exchange: { currency: 'USD', total: '12', rate, date: '2026-05-01', source: 'BCE' } } })
+      const posted = await posting.postInvoice(companyId, doc.id)
+      await svc.validateEntries(companyId, [posted.entryId])
+      return doc.id
+    }
+    const advance = await invoice('TOP-1', '4091')
+    const bill = await invoice('USE-1', '6241', 1200, '1')
+    const bank = await prisma.bankAccount.findFirstOrThrow({ where: { bankConnection: { companyId } } })
+    const tx = await prisma.bankTransaction.create({ data: { bankAccountId: bank.id, date: new Date('2026-05-02'), side: 'debit', amount: -10.03, externalTransactionId: 'unique-test-bank' } })
+    const bankDraft = await preparePurchasePayment(companyId, advance, { method: 'bank', transactionId: tx.id })
+    expect(bankDraft.lines).toContainEqual(expect.objectContaining({ accountCode: '656', debit: 0.03 }))
+    const walletDraft = await preparePurchasePayment(companyId, bill, { method: 'wallet', date: '2026-05-03' })
+    expect(walletDraft.lines).toContainEqual(expect.objectContaining({ accountCode: '756', credit: 2 }))
+    for (const [draft, id] of [[bankDraft, advance], [walletDraft, bill]] as const) {
+      await svc.validateEntries(companyId, [draft.entryId!])
+      const pay = (await payments.listPaymentCandidates(companyId, id)).candidates.find(l => l.entryId === draft.entryId)!
+      await payments.recordInvoicePayment(companyId, id, pay.entryLineId)
+      expect(await invoices.getInvoice(companyId, id)).toMatchObject({ status: 'paid', remainingCents: 0 })
+    }
+    await expect(preparePurchasePayment(companyId, bill, { method: 'wallet', date: '2026-05-03' })).rejects.toThrow(/existe déjà/)
+  })
+
   describe('tiers', () => {
     it('creates tiers with the next auxiliary number, checked identifiers and an owned address', async () => {
       const a = await tiersSvc.createTiers(books.companyId, { kind: 'CUSTOMER', name: 'Éole', email: null, siret: '73282932000074', vatNumber: 'fr44732829320', address: { street: '1 rue A', street2: null, postalCode: '75001', city: 'Paris', country: 'FR' } })

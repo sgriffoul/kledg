@@ -771,6 +771,8 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `DELETE /api/invoices/[id]/payments/[paymentId]` | entries:update | `manage_invoice` (CT) |
 | `GET /api/invoices/[id]/payments/candidates` | entries:read | `manage_invoice` (CT) ; Action payment_candidates, en lecture. |
 | `POST /api/invoices/[id]/payments` | entries:update | `manage_invoice` (CT) |
+| `POST /api/invoices/[id]/prepare-payment` | entries:create, banking:reconcile | `manage_invoice` (prepare_purchase_payment) |
+| `POST /api/invoices/adopt-purchase` | entries:create, banking:read | `adopt_purchase` |
 | `POST /api/invoices/[id]/post` | entries:create | `manage_invoice` (CT) |
 | `DELETE /api/invoices/[id]/post` | entries:delete | `manage_invoice` (CT) |
 | `GET /api/invoices/[id]` | entries:read | `get_invoice` (L) |
