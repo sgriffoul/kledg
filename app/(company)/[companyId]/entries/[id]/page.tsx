@@ -52,6 +52,8 @@ interface Entry {
   lines: EntryLine[]
   reversalOf?: LinkedEntry | null
   reversedBy?: LinkedEntry | null
+  salesDocumentUrl?: string | null
+  invoiceDocument?: { id: string; fileName: string } | null
   bankReceipts?: Array<{ id: string; fileName: string }>
 }
 
@@ -129,7 +131,7 @@ export default function EntryDetailPage() {
       })
       const data = await response.json()
       if (response.ok) {
-        setEntry({ ...data, bankReceipts: entry.bankReceipts })
+        setEntry({ ...data, bankReceipts: entry.bankReceipts, invoiceDocument: entry.invoiceDocument, salesDocumentUrl: entry.salesDocumentUrl })
         toast.success(`Écriture validée sous le n° ${data.entryNumber}`)
       } else {
         toast.error(data.error || 'La validation a échoué. Réessayez dans un instant.')
@@ -284,6 +286,20 @@ export default function EntryDetailPage() {
               {isValidated ? <StatusBadge tone="success">Validée</StatusBadge> : <StatusBadge tone="warning">Brouillon</StatusBadge>}
             </Detail>
             {entry.reference ? <Detail label="Référence">{entry.reference}</Detail> : null}
+            {entry.salesDocumentUrl ? (
+              <Detail label="Pièce de vente">
+                <a className="text-link underline-offset-4 hover:underline" href={entry.salesDocumentUrl} target="_blank" rel="noopener noreferrer">
+                  Ouvrir {entry.reference} dans Secretiar
+                </a>
+              </Detail>
+            ) : null}
+            {entry.invoiceDocument ? (
+              <Detail label="Facture">
+                <a className="text-link underline-offset-4 hover:underline" href={`/api/invoices/${encodeURIComponent(entry.invoiceDocument.id)}/attachment`} target="_blank" rel="noopener noreferrer">
+                  {entry.invoiceDocument.fileName}
+                </a>
+              </Detail>
+            ) : null}
             {entry.bankReceipts?.length ? (
               <Detail label="Justificatifs bancaires">
                 <ul className="space-y-1">

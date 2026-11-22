@@ -350,6 +350,32 @@ describe.skipIf(!available)('purchase and sales ledger (PostgreSQL)', () => {
       return { invoice, posted }
     }
 
+    it('archives an ordinary purchase PDF and settles the supplier in the following month', async () => {
+      const { stageReceipt } = await import('@/lib/receipts/stage-receipt.service')
+      const { readInvoiceAttachment } = await import('../read-invoice-attachment.service')
+      const { getCompanyEntry } = await import('@/lib/accounting/services/entry-operations.service')
+      const actor = { userId: 'invoice-owner', seesAll: false }
+      await prisma.user.create({ data: { id: actor.userId, email: 'owner@example.test', name: 'Owner' } })
+      await prisma.company.update({ where: { id: books.companyId }, data: { isVatExempt: true } })
+      const bytes = Buffer.from('%PDF-1.4\noriginal\n%%EOF')
+      const { receipt } = await stageReceipt(books.companyId, actor, { bytes, fileName: 'purchase.pdf', source: 'app' })
+      const input = { direction: 'PURCHASE' as const, tiersId: books.supplierId, number: 'P0626', issueDate: '2026-06-30', typeCode: '380' as const, lines: [line('Service', '1', 8739, 2000)] }
+      await expect(invoices.createInvoice(books.companyId, input, { purchaseReceipt: { id: receipt.id, actor: { userId: 'someone-else', seesAll: false } } })).rejects.toThrow()
+      const invoice = await invoices.createInvoice(books.companyId, input, { purchaseReceipt: { id: receipt.id, actor } })
+      expect(invoice).toMatchObject({ hasAttachment: true, totalInclTaxCents: 10487, totalVatCents: 1748 })
+      expect(Buffer.from(new Uint8Array((await readInvoiceAttachment(books.companyId, invoice.id)).body))).toEqual(bytes)
+      const posted = await posting.postInvoice(books.companyId, invoice.id)
+      expect((await getCompanyEntry(books.companyId, posted.entryId)).invoiceDocument?.id).toBe(invoice.id)
+      expect(await entryLines(posted.entryId)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: '401000', credit: '104.87', aux: 'F00001' }),
+        expect.objectContaining({ code: '6064', debit: '104.87' }),
+      ]))
+      await svc.validateEntries(books.companyId, [posted.entryId])
+      const paymentLine = await books.payment('supplier', '2026-07-02', '104.87', { aux: 'F00001' })
+      await payments.recordInvoicePayment(books.companyId, invoice.id, paymentLine)
+      expect(await invoices.getInvoice(books.companyId, invoice.id)).toMatchObject({ status: 'paid', remainingCents: 0 })
+    })
+
     it('records a full bank payment and letters the invoice with it (status paid)', async () => {
       const { invoice, posted } = await postedSale('V10', 10000)
       await svc.validateEntries(books.companyId, [posted.entryId])

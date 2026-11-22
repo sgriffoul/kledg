@@ -3,6 +3,7 @@ import { companyRoute, fromResource } from '@/lib/api/route'
 import { companyOfEntry } from '@/lib/api/resources'
 import { deleteDraftEntry, getCompanyEntry, getEntryStatus, listEntryBankReceipts, updateAccountingEntry } from '@/lib/accounting/services'
 import { entryLines, UpdateEntryBody } from '@/lib/api/entry-input'
+import { secretiarDocumentUrl } from '@/lib/invoices/secretiar-document'
 import { writeAuditLog } from '@/lib/audit'
 
 export const GET = companyRoute(
@@ -10,7 +11,8 @@ export const GET = companyRoute(
   async ({ params, companyId, can }) => {
     const entry = await getCompanyEntry(companyId, params.id as string)
     const bankReceipts = can({ banking: ['read'] }) ? await listEntryBankReceipts(companyId, entry.id) : []
-    return NextResponse.json({ ...entry, bankReceipts })
+    const salesDocumentUrl = secretiarDocumentUrl(companyId, entry, process.env.KLEDG_SECRETIAR_COMPANY_ID)
+    return NextResponse.json({ ...entry, bankReceipts, salesDocumentUrl })
   },
 )
 

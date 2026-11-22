@@ -23,10 +23,11 @@ import {
 export const ENTRY_NOT_FOUND = 'Écriture introuvable'
 
 /** An entry of the company with its journal, lines and reversal links, or a 404. */
-export async function getCompanyEntry(companyId: string, id: string): Promise<EntryWithRelations> {
-  const entry = await prisma.accountingEntry.findFirst({ where: { id, companyId }, include: ENTRY_INCLUDE })
+export async function getCompanyEntry(companyId: string, id: string): Promise<EntryWithRelations & { invoiceDocument: { id: string; fileName: string } | null }> {
+  const entry = await prisma.accountingEntry.findFirst({ where: { id, companyId }, include: { ...ENTRY_INCLUDE, invoice: { select: { id: true, attachmentFileName: true, documentFileId: true, externalAttachmentId: true } } } })
   if (!entry) throw new NotFoundError(ENTRY_NOT_FOUND)
-  return entry
+  const { invoice, ...details } = entry
+  return { ...details, invoiceDocument: invoice && (invoice.documentFileId || invoice.externalAttachmentId) ? { id: invoice.id, fileName: invoice.attachmentFileName ?? 'Facture' } : null }
 }
 
 /** Files of bank transactions linked to the entry, including direct reconciliations to an existing entry. */
