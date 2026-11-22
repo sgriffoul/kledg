@@ -53,6 +53,7 @@ interface Detail {
   /** Mentions of the exempt lines (CGI ann. II art. 242 nonies A, I, 12°). */
   vatExemptionMentions?: Array<{ code: string; text: string; positions: number[] }>
   vatBreakdown: Array<{ vatRateBp: number; baseCents: number; vatCents: number }>
+  draftSettlements?: Array<{ id: string; amountCents: number; bankDate: string; entryNumber: string }>
   payments: Array<{ id: string; bankDate?: string | null; amountCents: number; entry: { id: string; entryNumber: string; date: string; description: string | null }; vatTransferEntry: { id: string; entryNumber: string; status: string } | null }>
 }
 
@@ -505,6 +506,19 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
           </CardHeader>
           <CardContent className="space-y-4">
             {!posted ? <p className="text-muted-foreground text-sm">Comptabilisez la facture pour enregistrer ses règlements.</p> : null}
+            {invoice.draftSettlements?.length ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Règlements bancaires rapprochés en attente de validation comptable</p>
+                <ul className="divide-y rounded-md border">
+                  {invoice.draftSettlements.map(line => (
+                    <li key={line.id} className="flex justify-between gap-3 px-3 py-2 text-sm">
+                      <span><DateDisplay value={line.bankDate} /> · Écriture n° {line.entryNumber}</span>
+                      <Amount value={line.amountCents / 100} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {invoice.payments.length > 0 ? (
               <ul className="divide-y rounded-md border">
                 {invoice.payments.map((payment) => (
@@ -557,7 +571,7 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
                   ))}
                 </ul>
               </div>
-            ) : posted && invoice.remainingCents > 0 && candidates ? (
+            ) : posted && invoice.remainingCents > 0 && candidates && !invoice.draftSettlements?.length ? (
               <p className="text-muted-foreground text-sm">
                 Aucun mouvement bancaire rapproché ne correspond. Rapprochez la transaction sur le compte {sale ? '411' : '401'}, validez l’écriture, puis revenez ici.
               </p>

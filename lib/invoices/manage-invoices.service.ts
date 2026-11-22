@@ -344,8 +344,25 @@ export async function getInvoice(companyId: string, id: string, db: Db = prisma)
     row.origin === 'AUTO' && row.number === null ? await peekNextNumber(db, companyId, row.typeCode, calendarDayOf(row.issueDate) as string).catch(() => null) : null
   const hasExempt = row.lines.some((l) => l.vatExemption !== null)
   const companyMention = hasExempt ? ((await db.company.findUnique({ where: { id: companyId }, select: { vatExemptionMention: true } }))?.vatExemptionMention ?? null) : null
+  const draftSettlements = row.direction === 'PURCHASE' && row.number && row.entryId
+    ? await db.entryLine.findMany({
+        where: {
+          accountingEntry: { companyId, status: 'draft', reference: row.number, journal: { code: 'OD' } },
+          account: { code: row.tiers.collectiveAccountCode ?? '401' },
+          auxiliaryAccountNumber: row.tiers.auxiliaryAccountNumber,
+          settlementBank: { reconciled: true, bankAccount: { bankConnection: { companyId } } },
+          debit: { gt: 0 },
+        },
+        select: { id: true, debit: true, settlementBank: { select: { date: true } }, accountingEntry: { select: { entryNumber: true } } },
+        orderBy: { settlementBank: { date: 'asc' } },
+      })
+    : []
   return {
     ...summaryOf(row),
+    draftSettlements: draftSettlements.map(line => ({
+      id: line.id, amountCents: cents(line.debit), bankDate: calendarDayOf(line.settlementBank!.date),
+      entryNumber: line.accountingEntry.entryNumber,
+    })),
     purchaseOriginal: row.purchaseOriginal,
     provisionalNumber,
     numberAssignedAt: row.numberAssignedAt?.toISOString() ?? null,
