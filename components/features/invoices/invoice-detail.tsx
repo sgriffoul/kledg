@@ -35,10 +35,12 @@ interface Detail {
   dueDate: string
   label: string | null
   status: InvoiceStatus
+  purchaseOriginal?: { currency: string; total: string; rate: string; rateDate: string; source: string; net: string | null } | null
   source: 'MANUAL' | 'QONTO' | 'E_INVOICE'
   externalStatus: string | null
   hasAttachment: boolean
   letteringCode: string | null
+  unitemizedCents?: number
   totalExclTaxCents: number
   totalVatCents: number
   totalInclTaxCents: number
@@ -51,7 +53,7 @@ interface Detail {
   /** Mentions of the exempt lines (CGI ann. II art. 242 nonies A, I, 12°). */
   vatExemptionMentions?: Array<{ code: string; text: string; positions: number[] }>
   vatBreakdown: Array<{ vatRateBp: number; baseCents: number; vatCents: number }>
-  payments: Array<{ id: string; amountCents: number; entry: { id: string; entryNumber: string; date: string; description: string | null }; vatTransferEntry: { id: string; entryNumber: string; status: string } | null }>
+  payments: Array<{ id: string; bankDate?: string | null; amountCents: number; entry: { id: string; entryNumber: string; date: string; description: string | null }; vatTransferEntry: { id: string; entryNumber: string; status: string } | null }>
 }
 
 interface Candidate {
@@ -231,7 +233,7 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
             <Link href={`/${companyId}/tiers/${invoice.tiers.id}`} className="text-link underline-offset-4 hover:underline">
               {invoice.tiers.name}
             </Link>{' '}
-            (<span className="font-mono text-xs">{invoice.tiers.auxiliaryAccountNumber}</span>), du <DateDisplay value={invoice.issueDate} />, échéance le{' '}
+            (<span className="font-mono text-xs">{invoice.tiers.auxiliaryAccountNumber}</span>), du <DateDisplay value={invoice.issueDate} />, {invoice.purchaseOriginal ? 'échéance calculée le' : 'échéance le'}{' '}
             <DateDisplay value={invoice.dueDate} />.
           </>
         }
@@ -249,7 +251,7 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
                 </a>
               </Button>
             ) : null}
-            {!posted && invoice.source === 'MANUAL' && mayUpdate ? (
+            {!posted && !invoice.purchaseOriginal && invoice.source === 'MANUAL' && mayUpdate ? (
               <Button variant="outline" asChild>
                 <Link href={`/${companyId}/invoices/${invoiceId}/edit`}>
                   <Pencil aria-hidden />
@@ -263,7 +265,7 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
                 Supprimer
               </Button>
             ) : null}
-            {posted && invoice.entry?.status === 'draft' && invoice.payments.length === 0 && mayDelete ? (
+            {posted && !invoice.purchaseOriginal && invoice.entry?.status === 'draft' && invoice.payments.length === 0 && mayDelete ? (
               <Button variant="outline" onClick={unpost} disabled={busy}>
                 <Undo2 aria-hidden />
                 Supprimer l’écriture
@@ -274,7 +276,7 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
                 Reprendre la création dans Qonto
               </Button>
             ) : null}
-            {!posted && !invoice.qontoPending && !invoice.qontoDraft ? (
+            {!posted && !invoice.purchaseOriginal && !invoice.qontoPending && !invoice.qontoDraft ? (
               <Button onClick={post} disabled={busy || !mayPost || accountsChanged} loading={busy}>
                 <BookCheck aria-hidden />
                 Comptabiliser
@@ -300,6 +302,12 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
           {!invoice.number && invoice.origin === 'AUTO' ? (
             <span className="text-muted-foreground text-sm" data-testid="draft-number-hint">
               Numéro attribué à l’émission{invoice.provisionalNumber ? ` (prochain prévu : ${invoice.provisionalNumber})` : ''}
+            </span>
+          ) : null}
+          {invoice.purchaseOriginal && invoice.purchaseOriginal.currency !== 'EUR' ? (
+            <span className="text-muted-foreground text-sm">
+              Original {invoice.purchaseOriginal.total} {invoice.purchaseOriginal.currency} · 1 EUR = {invoice.purchaseOriginal.rate} {invoice.purchaseOriginal.currency}
+              {' '}({invoice.purchaseOriginal.source}, <DateDisplay value={invoice.purchaseOriginal.rateDate} />)
             </span>
           ) : null}
           {invoice.letteringCode ? <StatusBadge tone="success">Lettrée {invoice.letteringCode}</StatusBadge> : null}
@@ -332,6 +340,7 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
       <Card>
         <CardHeader>
           <CardTitle>Lignes</CardTitle>
+          {invoice.purchaseOriginal && !invoice.lines.length ? <CardDescription>Le détail des prestations figure dans le document original.</CardDescription> : null}
           {!posted && invoice.source === 'QONTO' ? (
             <CardDescription>Les montants viennent du document Qonto. Choisissez le compte de chaque ligne avant de comptabiliser.</CardDescription>
           ) : !posted && invoice.source === 'E_INVOICE' ? (
@@ -468,11 +477,11 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
             <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm">
               <dt className="text-muted-foreground">Total HT</dt>
               <dd className="text-right">
-                <Amount value={invoice.totalExclTaxCents / 100} />
+                {invoice.unitemizedCents ? 'Non ventilé sur le reçu' : <Amount value={invoice.totalExclTaxCents / 100} />}
               </dd>
               <dt className="text-muted-foreground">TVA</dt>
               <dd className="text-right">
-                <Amount value={invoice.totalVatCents / 100} />
+                {invoice.unitemizedCents ? 'Non ventilé sur le reçu' : <Amount value={invoice.totalVatCents / 100} />}
               </dd>
               <dt className="font-medium">Total TTC</dt>
               <dd className="text-right font-semibold">
@@ -502,6 +511,7 @@ export function InvoiceDetailView({ companyId, invoiceId }: { companyId: string;
                   <li key={payment.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5 text-sm">
                     <span className="min-w-0">
                       Écriture n° {payment.entry.entryNumber}, <DateDisplay value={payment.entry.date} />
+                      {payment.bankDate ? <> · Banque <DateDisplay value={payment.bankDate} /></> : null}
                       {payment.vatTransferEntry ? (
                         <span className="text-muted-foreground block text-xs">TVA exigible&nbsp;: écriture n° {payment.vatTransferEntry.entryNumber}</span>
                       ) : null}

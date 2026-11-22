@@ -426,6 +426,9 @@ model EntryLine {
   auxiliaryAccountLabel  String?
   letteringCode          String? // EcritureLet: may change after validation
   letteringDate          DateTime? // DateLet: may change after validation
+  /// Reclassification of a historical, individually reconciled purchase payment.
+  settlementBankId       String? @unique
+  settlementBank         BankTransaction? @relation("PurchasePaymentEvidence", fields: [settlementBankId], references: [id], onDelete: Restrict)
   currencyAmount         Decimal?  @db.Decimal(15, 2) // Montantdevise
   currencyCode           String? // Idevise (ISO 4217)
   createdAt              DateTime  @default(now())
@@ -600,6 +603,7 @@ model BankTransaction {
   // Relations
   bankAccount         BankAccount           @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
   attachments         Attachment[]
+  settlementLine      EntryLine? @relation("PurchasePaymentEvidence")
   reconciliationEntry AccountingEntry?      @relation("ReconciliationEntry")
   syncMatch           BankTransactionMatch?
   simpleModeEntries   SimpleModeEntry[]
@@ -1964,6 +1968,8 @@ model Invoice {
   sellerVatNumber      String?
   buyerSiren           String?
   buyerVatNumber       String?
+  unitemizedAmount     Decimal          @default(0) @db.Decimal(15, 2)
+  purchaseOriginal     Json?
   totalExclTax         Decimal          @db.Decimal(15, 2)
   totalVat             Decimal          @db.Decimal(15, 2)
   totalInclTax         Decimal          @db.Decimal(15, 2)

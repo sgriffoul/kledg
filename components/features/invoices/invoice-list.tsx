@@ -30,6 +30,7 @@ interface InvoiceRow {
   dueDate: string | null
   label: string | null
   tiers: { id: string; name: string; auxiliaryAccountNumber: string }
+  unitemizedCents?: number
   totalExclTaxCents: number | null
   totalInclTaxCents: number | null
   remainingCents: number | null
@@ -269,7 +270,7 @@ export function InvoiceList({ companyId, direction }: { companyId: string; direc
                             {invoice.dueDate ? <DateDisplay value={invoice.dueDate} /> : '—'}
                           </TableCell>
                           <TableCell numeric>
-                            <InvoiceAmount cents={invoice.totalExclTaxCents} currency={invoice.currency} />
+                            <InvoiceAmount cents={invoice.unitemizedCents ? null : invoice.totalExclTaxCents} currency={invoice.currency} />
                           </TableCell>
                           <TableCell numeric>
                             <InvoiceAmount cents={invoice.totalInclTaxCents} currency={invoice.currency} />

@@ -68,7 +68,7 @@ async function loadSettlement(db: Db, companyId: string, invoiceId: string) {
       direction: true,
       typeCode: true,
       totalInclTax: true,
-      tiers: { select: { auxiliaryAccountNumber: true } },
+      tiers: { select: { auxiliaryAccountNumber: true, collectiveAccountCode: true } },
       entry: {
         select: {
           id: true,
@@ -92,7 +92,7 @@ async function loadSettlement(db: Db, companyId: string, invoiceId: string) {
   if (!invoice) throw new NotFoundError(INVOICE_NOT_FOUND)
   if (!invoice.entry) throw new ConflictError(`La facture n° ${invoice.number} n’est pas comptabilisée : comptabilisez-la avant d’enregistrer un règlement.`)
   const tiersLine = invoice.entry.lines.find(
-    (l) => (l.account.code.startsWith('40') || l.account.code.startsWith('41')) && l.auxiliaryAccountNumber === invoice.tiers.auxiliaryAccountNumber,
+    (l) => (l.account.code.startsWith(invoice.direction === 'PURCHASE' ? '401' : '411') || l.account.code === invoice.tiers.collectiveAccountCode) && l.auxiliaryAccountNumber === invoice.tiers.auxiliaryAccountNumber,
   )
   if (!tiersLine) throw new ConflictError('L’écriture de cette facture n’a plus de ligne de tiers : vérifiez-la dans Écritures.')
   const pendingVatCents = invoice.entry.lines
@@ -113,6 +113,39 @@ async function reconciledEntries(db: Db, companyId: string, entryIds: string[]):
     db.accountingEntry.findMany({ where: { id: { in: entryIds }, companyId, sourceBankTransactionId: { not: null } }, select: { id: true } }),
   ])
   return new Set([...linked.map((t) => t.reconciledWith as string), ...created.map((e) => e.id)])
+}
+
+/** An existing debit on the supplier account can also clear a documented advance (PCG 401/4091).
+ * Historical bank reclassifications carry their individual, already reconciled transaction. */
+async function documentedPurchaseLines(db: Db, companyId: string, invoice: Awaited<ReturnType<typeof loadSettlement>>['invoice'], ids: string[]) {
+  if (invoice.direction !== 'PURCHASE' || invoice.typeCode !== '380' || !invoice.number || !ids.length) return new Set<string>()
+  const aux = invoice.tiers.auxiliaryAccountNumber
+  const rows = await db.entryLine.findMany({
+    where: { id: { in: ids }, auxiliaryAccountNumber: aux, debit: { gt: 0 },
+      accountingEntry: { companyId, status: 'validated', reference: invoice.number, journal: { code: 'OD' } } },
+    select: { id: true, debit: true, settlementBank: { select: { amount: true, side: true, reconciled: true,
+      reconciledWith: true, bankAccount: { select: { bankConnection: { select: { companyId: true } } } } } },
+      accountingEntry: { select: { lines: { select: { account: { select: { code: true } }, debit: true, credit: true, auxiliaryAccountNumber: true } } } } },
+  })
+  const eligible = new Set<string>()
+  for (const row of rows) {
+    const bank = row.settlementBank
+    if (bank?.reconciled && bank.reconciledWith && bank.side === 'debit' && bank.bankAccount.bankConnection.companyId === companyId &&
+        Math.abs(cents(bank.amount)) === cents(row.debit)) eligible.add(row.id)
+    if (bank?.reconciled && bank.reconciledWith && bank.side === 'debit' && bank.bankAccount.bankConnection.companyId === companyId && !eligible.has(row.id)) {
+      const original = await db.accountingEntry.findFirst({ where: { id: bank.reconciledWith, companyId,
+        reference: invoice.number, status: 'validated', journal: { code: 'BQ' } }, select: { lines: {
+        select: { account: { select: { code: true } }, debit: true, credit: true },
+      } } })
+      if (original && original.lines.every(l => ['4091','512','656','756'].some(root => l.account.code.startsWith(root))) &&
+          original.lines.some(l => l.account.code.startsWith('4091') && cents(l.debit) === cents(row.debit)) &&
+          original.lines.some(l => l.account.code.startsWith('512') && cents(l.credit) === Math.abs(cents(bank.amount)))) eligible.add(row.id)
+    }
+    const lines = row.accountingEntry.lines
+    if (!bank && lines.length === 2 && lines.some(l => l.account.code.startsWith('4091') &&
+        l.auxiliaryAccountNumber === aux && cents(l.credit) === cents(row.debit))) eligible.add(row.id)
+  }
+  return eligible
 }
 
 export interface PaymentCandidate {
@@ -153,8 +186,9 @@ export async function listPaymentCandidates(companyId: string, invoiceId: string
     take: 500,
   })
   const reconciled = await reconciledEntries(prisma, companyId, [...new Set(rows.map((r) => r.accountingEntry.id))])
+  const documented = await documentedPurchaseLines(prisma, companyId, invoice, rows.map(r => r.id))
   const candidates = rows
-    .filter((r) => reconciled.has(r.accountingEntry.id))
+    .filter((r) => reconciled.has(r.accountingEntry.id) || documented.has(r.id))
     .map((r) => {
       const amountCents = invoiceOnDebit ? cents(r.credit) : cents(r.debit)
       return {
@@ -263,7 +297,7 @@ export async function recordInvoicePayment(
       throw new ValidationError('Ce règlement dépasse le reste à payer de la facture : lettrez-le à la main dans Lettrage s’il règle plusieurs factures.')
     }
     const reconciled = await reconciledEntries(tx, companyId, [line.accountingEntry.id])
-    if (!reconciled.has(line.accountingEntry.id)) {
+    if (!reconciled.has(line.accountingEntry.id) && !(await documentedPurchaseLines(tx, companyId, invoice, [line.id])).has(line.id)) {
       throw new ValidationError('Ce mouvement n’est pas rapproché avec une transaction bancaire : rapprochez d’abord la transaction du règlement.')
     }
 

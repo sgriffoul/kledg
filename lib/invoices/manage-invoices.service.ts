@@ -145,6 +145,7 @@ const SUMMARY_SELECT = {
   typeCode: true,
   currency: true,
   label: true,
+  unitemizedAmount: true,
   totalExclTax: true,
   totalVat: true,
   totalInclTax: true,
@@ -158,8 +159,8 @@ const SUMMARY_SELECT = {
   documentFileId: true,
   entryId: true,
   updatedAt: true,
-  tiers: { select: { id: true, name: true, auxiliaryAccountNumber: true } },
-  entry: { select: { id: true, entryNumber: true, status: true, lines: { where: TIERS_LINE_WHERE, select: { id: true, letteringCode: true } } } },
+  tiers: { select: { id: true, name: true, auxiliaryAccountNumber: true, collectiveAccountCode: true } },
+  entry: { select: { id: true, entryNumber: true, status: true, lines: { where: TIERS_LINE_WHERE, select: { id: true, letteringCode: true, account: { select: { code: true } } } } } },
   payments: { select: { amount: true, entryLine: { select: { accountingEntry: { select: { date: true } } } } } },
 } satisfies Prisma.InvoiceSelect
 
@@ -179,6 +180,7 @@ export interface InvoiceSummary {
   currency: string
   label: string | null
   tiers: { id: string; name: string; auxiliaryAccountNumber: string }
+  unitemizedCents: number
   totalExclTaxCents: number
   totalVatCents: number
   totalInclTaxCents: number
@@ -213,7 +215,7 @@ export interface InvoiceSummary {
 function summaryOf(row: SummaryRow): InvoiceSummary {
   const totalInclTaxCents = cents(row.totalInclTax)
   const paidCents = row.payments.reduce((sum, p) => sum + cents(p.amount), 0)
-  const letteringCode = row.entry?.lines.find((l) => l.letteringCode)?.letteringCode ?? null
+  const letteringCode = row.entry?.lines.find((l) => l.letteringCode && (row.tiers.collectiveAccountCode ? l.account.code === row.tiers.collectiveAccountCode : l.account.code.startsWith(row.direction === 'PURCHASE' ? '401' : '411')))?.letteringCode ?? null
   const lettered = letteringCode !== null
   const lastPaymentDate = row.payments.reduce<string | null>((latest, p) => {
     const paidOn = calendarDayOf(p.entryLine.accountingEntry.date) as string
@@ -229,6 +231,7 @@ function summaryOf(row: SummaryRow): InvoiceSummary {
     currency: row.currency,
     label: row.label,
     tiers: row.tiers,
+    unitemizedCents: cents(row.unitemizedAmount),
     totalExclTaxCents: cents(row.totalExclTax),
     totalVatCents: cents(row.totalVat),
     totalInclTaxCents,
@@ -307,6 +310,7 @@ export async function listInvoices(companyId: string, query: ListInvoicesQuery &
 
 const DETAIL_SELECT = {
   ...SUMMARY_SELECT,
+  purchaseOriginal: true,
   sellerSiren: true,
   sellerVatNumber: true,
   buyerSiren: true,
@@ -314,7 +318,7 @@ const DETAIL_SELECT = {
   attachmentFileName: true,
   numberAssignedAt: true,
   createdAt: true,
-  tiers: { select: { id: true, name: true, kind: true, auxiliaryAccountNumber: true, defaultAccountCode: true, defaultVatRateBp: true } },
+  tiers: { select: { id: true, name: true, kind: true, auxiliaryAccountNumber: true, collectiveAccountCode: true, defaultAccountCode: true, defaultVatRateBp: true } },
   lines: {
     orderBy: { position: 'asc' },
     select: { id: true, position: true, label: true, quantity: true, unitPrice: true, vatRateBp: true, totalExclTax: true, accountCode: true, nature: true, fixedAsset: true, vatExemption: true },
@@ -327,7 +331,7 @@ const DETAIL_SELECT = {
       amount: true,
       createdAt: true,
       vatTransferEntry: { select: { id: true, entryNumber: true, status: true } },
-      entryLine: { select: { id: true, accountingEntry: { select: { id: true, entryNumber: true, date: true, description: true, status: true } } } },
+      entryLine: { select: { id: true, settlementBank: { select: { date: true } }, accountingEntry: { select: { id: true, entryNumber: true, date: true, description: true, status: true } } } },
     },
   },
 } satisfies Prisma.InvoiceSelect
@@ -342,6 +346,7 @@ export async function getInvoice(companyId: string, id: string, db: Db = prisma)
   const companyMention = hasExempt ? ((await db.company.findUnique({ where: { id: companyId }, select: { vatExemptionMention: true } }))?.vatExemptionMention ?? null) : null
   return {
     ...summaryOf(row),
+    purchaseOriginal: row.purchaseOriginal,
     provisionalNumber,
     numberAssignedAt: row.numberAssignedAt?.toISOString() ?? null,
     tiers: row.tiers,
@@ -367,6 +372,7 @@ export async function getInvoice(companyId: string, id: string, db: Db = prisma)
       id: p.id,
       amountCents: cents(p.amount),
       entryLineId: p.entryLine.id,
+      bankDate: p.entryLine.settlementBank ? calendarDayOf(p.entryLine.settlementBank.date) : null,
       entry: { ...p.entryLine.accountingEntry, date: calendarDayOf(p.entryLine.accountingEntry.date) as string },
       vatTransferEntry: p.vatTransferEntry,
     })),
@@ -447,7 +453,7 @@ async function loadTiersForInvoice(db: Db, companyId: string, tiersId: string, d
   return tiers
 }
 
-async function resolveDueDate(companyId: string, tiers: { paymentTermsDays: number | null; paymentTermsEndOfMonth: boolean | null }, issueDay: string, typed: string | null | undefined) {
+export async function resolveDueDate(companyId: string, tiers: { paymentTermsDays: number | null; paymentTermsEndOfMonth: boolean | null }, issueDay: string, typed: string | null | undefined) {
   if (typed) {
     if (typed < issueDay) throw new ValidationError('L’échéance ne peut pas précéder la date de la facture.')
     const cap = maxDueDate(issueDay)
@@ -647,6 +653,7 @@ export async function lockInvoice(tx: Prisma.TransactionClient, companyId: strin
       qontoDraft: true,
       externalId: true,
       documentFileId: true,
+      purchaseOriginal: true,
     },
   })
   return invoice
@@ -664,7 +671,7 @@ export async function updateInvoice(companyId: string, id: string, input: Update
   const number = await prisma.$transaction(async (tx) => {
     const current = await lockInvoice(tx, companyId, id)
     if (current.entryId) throw new ConflictError(DRAFT_ONLY(current))
-    if (current.source !== 'MANUAL') {
+    if (current.purchaseOriginal || current.source !== 'MANUAL') {
       throw new ConflictError('Une facture importée (Qonto, facture électronique) ou créée dans Qonto garde les montants du document : seuls ses comptes se modifient.')
     }
     let number: string | null

@@ -350,6 +350,30 @@ describe.skipIf(!available)('purchase and sales ledger (PostgreSQL)', () => {
       expect((await invoices.listPurchaseRegister('other-company', query)).items).toHaveLength(0)
     })
 
+    it('adopts a gross-only USD receipt, checks its EUR payable and settles from a documented advance', async () => {
+      const { adoptPurchase } = await import('../adopt-purchase.service')
+      const number = 'RECEIPT-17'
+      const entry = await svc.createEntry({ companyId: books.companyId, journalId: books.journals.AC, date: '2026-06-30', reference: number, description: 'Frais', status: 'validated',
+        lines: [{ accountId: books.accounts['6064'], debit: 10 }, { accountId: books.accounts['401000'], credit: 10, auxiliaryAccountNumber: 'F00001' }] })
+      const bytes = Buffer.from('%PDF-1.4')
+      const stored = await prisma.receiptFile.create({ data: { companyId: books.companyId, size: bytes.length, sha256: '2'.repeat(64), content: bytes, contentType: 'application/pdf' } })
+      const attachment = await prisma.attachment.create({ data: { companyId: books.companyId, supplierId: books.supplierId,
+        fileName: 'receipt.pdf', receiptFileId: stored.id, supportedEntries: { connect: { id: entry.id } },
+        providerData: { purchaseDocument: { number, currency: 'USD', date: '2026-06-30', total: 1200, net: null } } } })
+      const quote = { rate: '1.20', date: '2026-06-30', source: 'BCE' }
+      await expect(adoptPurchase(books.companyId, attachment.id, { ...quote, rate: '1' })).rejects.toThrow()
+      const id = await adoptPurchase(books.companyId, attachment.id, quote)
+      expect(await adoptPurchase(books.companyId, attachment.id, quote)).toBe(id)
+      expect(await invoices.getInvoice(books.companyId, id)).toMatchObject({ unitemizedCents: 1000, remainingCents: 1000, purchaseOriginal: { total: '12.00', currency: 'USD' }, entry: { id: entry.id } })
+      const advance = await prisma.account.create({data:{companyId:books.companyId,fiscalYearId:books.fiscalYearId,code:'409100',label:'Avances'}})
+      const offset = await svc.createEntry({ companyId: books.companyId, journalId: books.journals.OD, date:'2026-06-30',reference:number,description:'Imputation sur avance',status:'validated',
+        lines:[{accountId:books.accounts['401000'],debit:10,auxiliaryAccountNumber:'F00001'},{accountId:advance.id,credit:10,auxiliaryAccountNumber:'F00001'}] })
+      const candidate = (await payments.listPaymentCandidates(books.companyId,id)).candidates.find(c=>c.entryId===offset.id)
+      expect(candidate?.amountCents).toBe(1000)
+      const result = await payments.recordInvoicePayment(books.companyId,id,candidate!.entryLineId)
+      expect(result).toMatchObject({ remainingCents: 0, lettered: true })
+    })
+
     it('archives an ordinary purchase PDF and settles the supplier in the following month', async () => {
       const { stageReceipt } = await import('@/lib/receipts/stage-receipt.service')
       const { readInvoiceAttachment } = await import('../read-invoice-attachment.service')

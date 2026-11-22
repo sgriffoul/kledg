@@ -72,6 +72,7 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
   const deductionPercent = header?.direction === 'PURCHASE' ? ((await vatDeductionOn(companyId, header.issueDate)).percent ?? undefined) : undefined
   const result = await prisma.$transaction(async (tx) => {
     const locked = await lockInvoice(tx, companyId, invoiceId)
+    if (locked.purchaseOriginal && !locked.entryId) throw new ConflictError('Le lien avec l’écriture reprise doit être rétabli avant toute comptabilisation.')
     if (locked.entryId) throw new ConflictError(`${invoiceName(locked)} est déjà comptabilisée.`)
     if (locked.number === null && locked.origin === 'QONTO' && locked.qontoDraft && locked.externalId) {
       throw new ConflictError(
@@ -223,6 +224,7 @@ export async function postInvoice(companyId: string, invoiceId: string, options:
 export async function unpostInvoice(companyId: string, invoiceId: string): Promise<{ invoiceId: string }> {
   const number = await prisma.$transaction(async (tx) => {
     const locked = await lockInvoice(tx, companyId, invoiceId)
+    if (locked.purchaseOriginal) throw new ConflictError('Cette fiche reprend une écriture existante. Corrigez-la depuis le journal.')
     if (!locked.entryId) throw new ConflictError(`${invoiceName(locked)} n’est pas comptabilisée.`)
     // A customer payment confirmed in simple mode names the invoice, recorded on it or waiting for validation
     const simplePayments = await tx.simpleModeEntry.count({ where: { companyId, invoiceId } })
