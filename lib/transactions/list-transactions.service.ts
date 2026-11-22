@@ -233,6 +233,7 @@ export async function listTransactions(query: ListTransactionsQuery) {
         { counterpartyName: { contains: searchText, mode: 'insensitive' } },
         { label: { contains: searchText, mode: 'insensitive' } },
         { reference: { contains: searchText, mode: 'insensitive' } },
+        { attachments: { some: { companyId, fileName: { contains: searchText, mode: 'insensitive' } } } },
       ],
     }),
     ...(providers.length > 0 && { AND: providers }),

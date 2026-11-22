@@ -17,6 +17,7 @@ import { invoiceOriginLabel, type InvoiceOriginCode } from '@/lib/invoices/origi
 import { plural } from '@/lib/utils/plural'
 import type { InvoiceDirection } from './invoice-form'
 import { EInvoiceImportDialog } from './e-invoice-import-dialog'
+import { PurchaseReceiptArchive } from './purchase-receipt-archive'
 
 interface InvoiceRow {
   id: string
@@ -280,6 +281,7 @@ export function InvoiceList({ companyId, direction }: { companyId: string; direc
           )}
         </CardContent>
       </Card>
+      {!sale && can({ banking: ['read'] }) ? <PurchaseReceiptArchive companyId={companyId} /> : null}
     </div>
   )
 }

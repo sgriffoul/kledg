@@ -1,4 +1,5 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }))
@@ -31,6 +32,26 @@ describe('empty lists say what to do next', () => {
     const empty = await emptyState('Aucune facture d’achat')
     expect(within(empty).getByRole('link', { name: 'Nouvelle facture' }).getAttribute('href')).toBe('/atelier/invoices/new?direction=PURCHASE')
     expect(within(empty).queryByRole('link', { name: 'Ajouter un client' })).toBeNull()
+  })
+
+  it('searches bank-backed receipts from purchase invoices and opens the original', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.startsWith('/api/transactions?')) return Response.json({ items: [], nextCursor: null })
+      return Response.json({ transactions: [{
+        id: 't1', label: 'OPENAI', date: '2026-11-21', amount: 16.5, reconciledWith: 'e1',
+        attachments: [{ id: 'a1', fileName: '278896CD-0063.pdf' }],
+      }] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<InvoiceList companyId="atelier" direction="PURCHASE" />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Rechercher un justificatif' }))
+    expect(await screen.findByRole('link', { name: '278896CD-0063.pdf' })).toHaveAttribute(
+      'href', '/api/banking/attachments/a1/proxy?companyId=atelier',
+    )
+    expect(screen.getByRole('link', { name: 'Voir l’écriture' })).toHaveAttribute('href', '/atelier/entries/e1')
+    await user.type(screen.getByLabelText('Fournisseur ou numéro de facture'), '0063')
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url.includes('hasAttachments=with') && url.includes('searchText=0063'))).toBe(true))
   })
 
   it('offers no creation to a role that cannot create invoices', async () => {
