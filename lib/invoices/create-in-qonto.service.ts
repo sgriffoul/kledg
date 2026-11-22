@@ -88,7 +88,8 @@ export async function qontoFirstActive(companyId: string): Promise<boolean> {
  * Kledg (Kledg's series, typed, or already issued elsewhere). The entry
  * point of the API route and the MCP tool.
  */
-export async function issueInvoice(companyId: string, input: CreateInvoiceInput, options: { source?: string } = {}): Promise<InvoiceDetail> {
+export async function issueInvoice(companyId: string, input: CreateInvoiceInput, options: Pick<NonNullable<Parameters<typeof createInvoice>[2]>, 'source' | 'purchaseReceipt'> = {}): Promise<InvoiceDetail> {
+  if (options.purchaseReceipt && (input.direction !== 'PURCHASE' || input.numbering || input.qontoStatus)) throw new ValidationError('Le PDF doit accompagner une facture fournisseur.')
   let choice = input.numbering
   if (input.qontoStatus && choice && choice !== 'qonto') {
     throw new ValidationError('Le statut dans Qonto (brouillon ou finalisée) ne vaut que pour une facture créée dans Qonto.')
@@ -96,7 +97,7 @@ export async function issueInvoice(companyId: string, input: CreateInvoiceInput,
   if (!choice && input.qontoStatus) choice = 'qonto'
   if (!choice && input.direction === 'SALE' && input.typeCode === '380' && !input.number && (await qontoFirstActive(companyId))) choice = 'qonto'
   if (choice === 'qonto') return createInvoiceInQonto(companyId, input, options)
-  return createInvoice(companyId, input, { source: options.source, origin: await originOfNewInvoice(prisma, companyId, input.direction, choice) })
+  return createInvoice(companyId, input, { ...options, origin: await originOfNewInvoice(prisma, companyId, input.direction, choice) })
 }
 
 function refusalMessage(outcome: Extract<QontoCreateOutcome<unknown>, { kind: 'refused' }>, what: 'invoice' | 'client', name: string): string {

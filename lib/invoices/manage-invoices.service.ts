@@ -36,6 +36,7 @@ import { prisma } from '@/lib/prisma'
 import { ConflictError, NotFoundError, ValidationError } from '@/lib/accounting/errors'
 import { calendarDay, centsField, optionalText } from '@/lib/api/zod-fields'
 import { changedSinceOrder, changedSinceWhere, changesPage, INVALID_CURSOR } from '@/lib/api/changed-since'
+import { findStagedReceipt, type StagedReceiptActor } from '@/lib/receipts/stage-receipt.service'
 import { writeAuditLog } from '@/lib/audit'
 import { dayToDate } from '@/lib/accounting/entry-date'
 import { getPaymentTerms } from '@/lib/companies/payment-terms.service'
@@ -563,7 +564,7 @@ function numberForOrigin(origin: InvoiceOrigin, number: string | null | undefine
 export async function createInvoice(
   companyId: string,
   input: CreateInvoiceInput,
-  options: { source?: string; db?: Prisma.TransactionClient; origin?: InvoiceOrigin; qontoRequestedAt?: Date; qontoDraft?: boolean } = {},
+  options: { source?: string; db?: Prisma.TransactionClient; origin?: InvoiceOrigin; qontoRequestedAt?: Date; qontoDraft?: boolean; purchaseReceipt?: { id: string; actor: StagedReceiptActor } } = {},
 ): Promise<InvoiceDetail> {
   const run = async (tx: Prisma.TransactionClient) => {
     const company = await loadCompany(tx, companyId)
@@ -577,6 +578,20 @@ export async function createInvoice(
       if (origin === 'RECORDED') await assertOutsideRunningSeries(tx, companyId, number)
     }
     const dueDate = await resolveDueDate(companyId, tiers, input.issueDate, input.dueDate)
+    let document: { documentFileId: string; attachmentFileName: string } | undefined
+    if (options.purchaseReceipt) {
+      if (input.direction !== 'PURCHASE') throw new ValidationError('Le justificatif est réservé aux factures d’achat.')
+      const receipt = await findStagedReceipt(companyId, options.purchaseReceipt.id, options.purchaseReceipt.actor, tx)
+      if (!receipt.fileId || receipt.status !== 'staged' || receipt.expiresAt <= new Date() || receipt.contentType !== 'application/pdf') {
+        throw new ValidationError('Choisissez un PDF disponible parmi les justificatifs en attente.')
+      }
+      const linked = await tx.invoice.findFirst({ where: { companyId, documentFileId: receipt.fileId }, select: { id: true } })
+      if (linked) throw new ConflictError('Ce PDF est déjà rattaché à une facture.')
+      // Claim the staged file atomically. Deleting the staging row leaves its bytes for the invoice.
+      const claimed = await tx.stagedReceipt.deleteMany({ where: { id: receipt.id, companyId, status: 'staged', fileId: receipt.fileId } })
+      if (!claimed.count) throw new ConflictError('Ce justificatif a déjà été traité.')
+      document = { documentFileId: receipt.fileId, attachmentFileName: receipt.fileName }
+    }
     const created = await tx.invoice.create({
       data: {
         companyId,
@@ -589,6 +604,7 @@ export async function createInvoice(
         dueDate: dayToDate(dueDate),
         typeCode: input.typeCode,
         label: input.label ?? null,
+        ...document,
         ...partiesOf(input.direction, company, tiers),
         ...amountData(totals),
         lines: { create: lineRows(prepared, totals) },

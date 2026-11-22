@@ -21,14 +21,17 @@ import { issueInvoice, qontoFirstActive } from '@/lib/invoices/create-in-qonto.s
 import { loadNumberingSettings, peekNextNumber } from '@/lib/invoices/numbering/series'
 import { postInvoice } from '@/lib/invoices/post-invoice.service'
 import { analyzeEInvoice, importEInvoice, type EInvoiceAnalysis } from '@/lib/invoices/import-e-invoice.service'
+import { findStagedReceipt } from '@/lib/receipts/stage-receipt.service'
+import { receiptActorOf } from '@/lib/receipts/actor'
 import { assertFileSize } from '@/lib/api/files'
 import { enforceRateLimit } from '@/lib/rate-limit'
 import { fromCents, toCents } from '@/lib/utils/money'
 import { fullControlTool, type RegisterTool } from './define'
 import { ACTS_AS_USER, TWO_STEP } from './descriptions'
-import { companyLock } from './fingerprint'
+import { companyLock, rowTargets } from './fingerprint'
 
 const input = {
+  stagedReceiptId: z.string().min(1).max(100).optional().describe('Purchase only: original PDF from stage_receipt, filed with the invoice.'),
   direction: z.enum(['SALE', 'PURCHASE']).describe('SALE: invoice issued to a customer (journal VE); PURCHASE: invoice received from a supplier (journal AC).'),
   tiers: z.string().min(1).max(64).describe('Tiers id or auxiliary account number, from list_tiers (a customer for a sale, a supplier for a purchase).'),
   number: z
@@ -119,15 +122,21 @@ const createDraftInvoiceTool = fullControlTool({
   units: 'VAT rates in percent, dates as yyyy-mm-dd.',
   never: 'sends the invoice to the customer or validates its entry (the entry stays a draft).',
   openWorld: true,
-  targetState: ({ companyId }) => [companyLock(companyId)],
+  targetState: ({ companyId, stagedReceiptId }) => [companyLock(companyId), ...rowTargets('staged_receipts', companyId, stagedReceiptId)],
   confirmation: true,
-  async preview(args) {
+  async preview(args, ctx) {
+    const receipt = args.stagedReceiptId
+      ? await findStagedReceipt(args.companyId, args.stagedReceiptId, await receiptActorOf(ctx.access.user, args.companyId))
+      : null
     const tiers = await resolveTiers(args.companyId, args.tiers)
     const lines = linesOf(args)
     const totals = computeInvoiceTotals(lines)
     assertInvoiceAmountsFit(totals)
     const problems: string[] = []
     if ((args.direction === 'SALE') !== (tiers.kind === 'CUSTOMER')) problems.push(args.direction === 'SALE' ? 'Une facture de vente s’adresse à un client.' : 'Une facture d’achat vient d’un fournisseur.')
+    if (receipt && (args.direction !== 'PURCHASE' || args.numbering || args.qontoStatus || !receipt.fileId || receipt.status !== 'staged' || receipt.contentType !== 'application/pdf' || receipt.expiresAt <= new Date())) {
+      problems.push('Choisissez un PDF disponible pour cette facture fournisseur.')
+    }
     const numbering = await numberingPreview(args)
     if (numbering.problem) problems.push(numbering.problem)
     return {
@@ -138,11 +147,12 @@ const createDraftInvoiceTool = fullControlTool({
       totalVat: fromCents(totals.totalVatCents),
       totalInclTax: fromCents(totals.totalInclTaxCents),
       vatBreakdown: totals.breakdown.map((row) => ({ ratePercent: row.vatRateBp / 100, base: fromCents(row.baseCents), vat: fromCents(row.vatCents) })),
+      ...(receipt ? { document: { fileName: receipt.fileName, sha256: receipt.sha256 } } : {}),
       willPost: args.post,
       problems,
     }
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const tiers = await resolveTiers(args.companyId, args.tiers)
     const invoice = await issueInvoice(
       args.companyId,
@@ -158,7 +168,7 @@ const createDraftInvoiceTool = fullControlTool({
         label: args.label ?? null,
         lines: linesOf(args).map((line) => ({ label: line.label, quantity: line.quantity, unitPriceCents: line.unitPriceCents, vatRateBp: line.vatRateBp, accountCode: line.accountCode, nature: line.nature, fixedAsset: line.fixedAsset })),
       },
-      { source: 'mcp' },
+      { source: 'mcp', ...(args.stagedReceiptId ? { purchaseReceipt: { id: args.stagedReceiptId, actor: await receiptActorOf(ctx.access.user, args.companyId) } } : {}) },
     )
     const posted = args.post ? await postInvoice(args.companyId, invoice.id, { source: 'mcp' }) : null
     return {

@@ -901,3 +901,14 @@ Niveaux : L, lecture (`kledg:read`) ; B, brouillons (`kledg:write`) ; CT, con
 | `POST /api/users` | administrateur de l’instance | Exclu : administration de l'instance |
 | `POST /api/year-end/entries` | entries:create | `prepare_year_end_entries` (B) |
 | `GET /api/year-end` | reports:read | `get_year_end_inventory` (L) |
+
+Pour une facture fournisseur reçue en PDF ordinaire, `stage_receipt` fournit
+le `stagedReceiptId` accepté par `create_draft_invoice`. La création conserve
+le PDF sur la fiche. Il est accessible depuis la fiche et son écriture d'achat.
+
+L'intégration optionnelle Secretiar utilise `KLEDG_SECRETIAR_COMPANY_ID`.
+Pour cette société, les écritures VE importées avec le numéro source
+`SEC-<PieceRef>` et un auxiliaire client unique sur 411 proposent le document
+dans l'espace administrateur authentifié de Secretiar. Conserver les numéros
+source lors de l'import. Le lien nécessite la page `/admin/billing-document`
+sur Secretiar.
